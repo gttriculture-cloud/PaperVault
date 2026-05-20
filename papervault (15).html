@@ -1,0 +1,1923 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CXCPaperVault — CSEC & CAPE Past Papers</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  import { getFirestore, doc, getDoc, setDoc, collection, getDocs, addDoc, deleteDoc, deleteField }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // ── HELPERS (defined first so everything below can use them) ──
+  function esc(str) {
+    return String(str||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+  function showToast(msg, type="success") {
+    const t = document.getElementById("toast");
+    if (!t) return;
+    t.textContent = msg;
+    t.className = "toast show " + type;
+    setTimeout(() => { t.className = "toast"; }, 3200);
+  }
+  window.showToast = showToast;
+
+  // ── CONSTANTS ────────────────────────────────────────────────
+  const firebaseConfig = {
+    apiKey: "AIzaSyDqmuX_ZjnmHm8ganR4vsu8qeChxkXCiLM",
+    authDomain: "cxc-stuff.firebaseapp.com",
+    projectId: "cxc-stuff",
+    storageBucket: "cxc-stuff.firebasestorage.app",
+    messagingSenderId: "489439880226",
+    appId: "1:489439880226:web:be2f7ebd94b391e936967b",
+    measurementId: "G-LK005E3D6Q"
+  };
+  const ADMIN_EMAIL = "gt.triculture@gmail.com";
+  const CSEC_SUBJECTS = [
+    "Mathematics","English A","Additional Mathematics","English B","Spanish","French","Portuguese",
+    "Integrated Science","Human & Social Biology","Chemistry","Biology","Information Technology",
+    "Physics","Electronic Document Preparation & Management","Metal Work","Electrical & Electronic Engineering",
+    "Industrial Technology","Technical Drawing","Geography","History","Social Studies",
+    "Clothing & Textiles","Home Economics","Food & Nutrition","Agricultural Science",
+    "Principles of Business","Principles of Accounts","Office Administration","Economics",
+    "Art & Craft","Theatre Arts","Music","Religious Education","Physical Education"
+  ];
+  const CAPE_SUBJECTS = [
+    "Building & Mechanical Engineering Drawing","Caribbean Studies","Communication Studies",
+    "Spanish","French","Literature in English","Applied Mathematics","Integrated Mathematics",
+    "Pure Mathematics","Chemistry","Biology","Physics","Environmental Science","Green Engineering",
+    "Tourism","Geography","History","Sociology","Law","Accounting","Economics",
+    "Management of Business","Entrepreneurship","Information Technology","Computer Science",
+    "Digital Media","Art & Design","Agricultural Science","Physical Education",
+    "Food & Nutrition","Logistics & Supply Chain Operations","Performing Arts",
+    "Electrical & Electronic Engineering"
+  ];
+  const CSEC_PAPERS = ["Paper 1","Paper 2","Paper 3","SBA"];
+  const CAPE_PAPERS = ["Unit 1 — Paper 1","Unit 1 — Paper 2","Unit 1 — Paper 3","Unit 2 — Paper 1","Unit 2 — Paper 2","Unit 2 — Paper 3","SBA"];
+
+  // ── FIREBASE ─────────────────────────────────────────────────
+  const app  = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db   = getFirestore(app);
+  const provider = new GoogleAuthProvider();
+
+  // ── STATE ────────────────────────────────────────────────────
+  let currentUser = null;
+  let isAdmin     = false;
+  let hasAccess   = false;
+  let allPapers   = [];
+  let activeType    = "ALL";
+  let activeSubject = "ALL";
+  let activePaper   = "ALL";
+  let allUsersCache = [];
+
+  // ── AUTH ─────────────────────────────────────────────────────
+  onAuthStateChanged(auth, async (user) => {
+    currentUser = user;
+    if (user) {
+      isAdmin   = user.email === ADMIN_EMAIL;
+      hasAccess = isAdmin;
+      if (!isAdmin) {
+        const snap = await getDoc(doc(db, "users", user.uid));
+        if (snap.exists()) {
+          hasAccess = snap.data().access === true;
+        } else {
+          await setDoc(doc(db, "users", user.uid), {
+            email: user.email, name: user.displayName || "",
+            access: false, createdAt: new Date()
+          });
+        }
+      }
+      showScreen(hasAccess ? "papers" : "waitlist");
+    } else {
+      showScreen("login");
+    }
+  });
+
+  window.signInWithGoogle = async () => {
+    try { await signInWithPopup(auth, provider); }
+    catch (e) { showToast("Sign in failed. Please try again.", "error"); }
+  };
+  window.signOutUser = async () => { await signOut(auth); showScreen("login"); };
+
+  // ── SCREENS ──────────────────────────────────────────────────
+  function showScreen(name) {
+    document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+    document.getElementById("screen-" + name)?.classList.add("active");
+    if (name === "papers")  initPapers();
+    if (name === "waitlist") initWaitlist();
+    if (name === "admin")   initAdmin();
+  }
+  window.showScreen = showScreen;
+
+  // ── WAITLIST ─────────────────────────────────────────────────
+  async function initWaitlist() {
+    document.getElementById("wl-name").value  = currentUser?.displayName || "";
+    document.getElementById("wl-email").value = currentUser?.email || "";
+    const snap = await getDocs(collection(db, "accessRequests"));
+    let already = false;
+    snap.forEach(d => { if (d.data().userId === currentUser?.uid) already = true; });
+    document.getElementById("wl-form").style.display    = already ? "none"  : "block";
+    document.getElementById("wl-pending").style.display = already ? "flex"  : "none";
+  }
+  window.initWaitlist = initWaitlist;
+
+  window.submitWaitlist = async () => {
+    const name  = document.getElementById("wl-name").value.trim();
+    const email = document.getElementById("wl-email").value.trim();
+    const note  = document.getElementById("wl-note").value.trim();
+    const btn   = document.getElementById("wl-submit-btn");
+    if (!name)  { showToast("Please enter your full name.", "error");    return; }
+    if (!email) { showToast("Please enter your email address.", "error"); return; }
+    btn.disabled = true; btn.textContent = "Submitting…";
+    try {
+      await addDoc(collection(db, "accessRequests"), {
+        userId: currentUser.uid, googleEmail: currentUser.email,
+        name, email, note: note || "", status: "pending", createdAt: new Date()
+      });
+      document.getElementById("wl-form").style.display    = "none";
+      document.getElementById("wl-pending").style.display = "flex";
+    } catch { showToast("Something went wrong. Try again.", "error"); }
+    finally { btn.disabled = false; btn.textContent = "Request Access"; }
+  };
+
+  // ── PAPERS ───────────────────────────────────────────────────
+  async function initPapers() {
+    const nameEl = document.getElementById("user-name");
+    if (nameEl) {
+      nameEl.textContent = currentUser?.displayName || currentUser?.email || "";
+      const av = document.getElementById("user-avatar");
+      if (av && nameEl.textContent) av.textContent = nameEl.textContent[0].toUpperCase();
+    }
+    document.getElementById("admin-btn").style.display = isAdmin ? "inline-flex" : "none";
+    activeType = "ALL"; activeSubject = "ALL"; activePaper = "ALL"; activeSection = "papers"; activeViewMode = "rows";
+    renderFilterBar();
+    await loadPapers();
+    loadAnnouncement();
+  }
+  window.initPapers = initPapers;
+
+  async function loadPapers() {
+    document.getElementById("papers-content").innerHTML = `<div class="spinner"></div>`;
+    const snap = await getDocs(collection(db, "papers"));
+    allPapers = [];
+    snap.forEach(d => allPapers.push({ id: d.id, ...d.data() }));
+    renderPapers();
+  }
+  window.loadPapers = loadPapers;
+
+  function updateFilterRowVisibility() {
+    const sr = document.getElementById("filter-subject-row");
+    const pr = document.getElementById("filter-paper-row");
+    if (sr) sr.style.display = activeType !== "ALL" ? "block" : "none";
+    if (pr) pr.style.display = activeSubject !== "ALL" ? "block" : "none";
+  }
+
+  window.setFilter = (type, value) => {
+    if (type === "type")    { activeType = value; activeSubject = "ALL"; activePaper = "ALL"; }
+    else if (type === "subject") { activeSubject = value; activePaper = "ALL"; }
+    else if (type === "paper")   { activePaper = value; }
+    renderFilterBar();
+    updateFilterRowVisibility();
+    renderPapers();
+  };
+
+  function renderFilterBar() {
+    const typeTabs = document.getElementById("filter-type");
+    typeTabs.innerHTML = ["ALL","CSEC","CAPE"].map(t => {
+      if (t === "CAPE") return `<div class="cape-wrap"><button class="ftab ${activeType===t?"active":""}" onclick="setFilter('type','CAPE')">CAPE</button><span class="cape-soon">Coming Soon</span></div>`;
+      return `<button class="ftab ${activeType===t?"active":""}" onclick="setFilter('type','${t}')">${t==="ALL"?"All Papers":t}</button>`;
+    }).join("");
+
+    const subjectBar = document.getElementById("filter-subject");
+    if (activeType === "ALL") { subjectBar.innerHTML = ""; return; }
+    const subjects = activeType === "CSEC" ? CSEC_SUBJECTS : CAPE_SUBJECTS;
+    subjectBar.innerHTML = `<div class="filter-scroll-wrap"><div class="filter-scroll">
+      <button class="ftag ${activeSubject==="ALL"?"active":""}" onclick="setFilter('subject','ALL')">All Subjects</button>
+      ${subjects.map(s => `<button class="ftag ${activeSubject===s?"active":""}" onclick="setFilter('subject','${s.replace(/'/g,"&#39;")}')">${s}</button>`).join("")}
+    </div></div>`;
+
+    const paperBar = document.getElementById("filter-paper");
+    if (activeSubject === "ALL") { paperBar.innerHTML = ""; return; }
+    const papers = activeType === "CSEC" ? CSEC_PAPERS : CAPE_PAPERS;
+    paperBar.innerHTML = `<div class="filter-scroll-wrap"><div class="filter-scroll">
+      <button class="ftag sm ${activePaper==="ALL"?"active":""}" onclick="setFilter('paper','ALL')">All Papers</button>
+      ${papers.map(p => `<button class="ftag sm ${activePaper===p?"active":""}" onclick="setFilter('paper','${p.replace(/'/g,"&#39;")}')">${p}</button>`).join("")}
+    </div></div>`;
+  }
+  window.renderFilterBar = renderFilterBar;
+
+  function renderPapers() {
+    const cont = document.getElementById("papers-content");
+    let filtered = allPapers;
+
+    // Non-admins never see hidden papers
+    if (!isAdmin) filtered = filtered.filter(p => p.hidden !== true);
+
+    if (activeSection === "ai") {
+      cont.innerHTML = `<div class="empty-state"><div class="empty-icon">🤖</div><p class="empty-title">No content here yet...</p><p class="empty-sub">AI Detection is not supported as yet.. coming soon..</p></div>`;
+      return;
+    }
+
+    if (activeType    !== "ALL") filtered = filtered.filter(p => p.type    === activeType);
+    if (activeSubject !== "ALL") filtered = filtered.filter(p => p.subject === activeSubject);
+    if (activePaper   !== "ALL") filtered = filtered.filter(p => p.paper   === activePaper);
+
+    if (filtered.length === 0) {
+      if (activeType === "CAPE") {
+        cont.innerHTML = `<div class="empty-state"><div class="empty-icon">📂</div><p class="empty-title">No papers here yet...</p><p class="empty-sub">CAPE papers are not supported as yet.. coming soon..</p></div>`;
+      } else {
+        const ctx = activeSubject !== "ALL" ? ` in <strong>${activeSubject}</strong>` : "";
+        cont.innerHTML = `<div class="empty-state"><div class="empty-icon">📂</div><p class="empty-title">No papers here yet...</p><p class="empty-sub">Have a paper${ctx} and want to add it to our vast database?</p><a href="mailto:gt.triculture@gmail.com?subject=Paper%20Submission" class="btn-email-suggest">📧 Email: gt.triculture@gmail.com</a></div>`;
+      }
+      return;
+    }
+
+    const grouped = {};
+    filtered.forEach(p => { const k = p.subject||"Other"; if (!grouped[k]) grouped[k]=[]; grouped[k].push(p); });
+    let html = "";
+    for (const [subject, papers] of Object.entries(grouped).sort()) {
+      const gridClass = activeViewMode === "grid" ? " view-grid" : activeViewMode === "grid-sm" ? " view-grid-sm" : "";
+      html += `<div class="subject-group"><div class="subject-header"><span class="subject-label">${subject}</span><span class="subject-count">${papers.length} paper${papers.length!==1?"s":""}</span></div><div class="papers-list${gridClass}">`;
+      papers.forEach(p => {
+        const ex = esc(p.extra||"");
+        const isHidden = p.hidden === true;
+        const isBookmarked = isStarred(p.id);
+        html += `<div class="paper-card${isHidden&&isAdmin?" paper-hidden":""}">
+          <div class="paper-left">
+            <span class="type-badge ${(p.type||"csec").toLowerCase()}">${p.type||"CSEC"}</span>
+            <div class="paper-info">
+              <div class="paper-title">${esc(p.title)}</div>
+              ${ex ? `<div class="paper-extra">${ex}</div>` : ""}
+            </div>
+          </div>
+          <div class="paper-right">
+            <button class="bookmark-btn ${isBookmarked?"starred":""}" onclick="toggleBookmark('${p.id}')" title="${isBookmarked?"Remove bookmark":"Bookmark this paper"}">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="${isBookmarked?"#f0a500":"none"}" stroke="${isBookmarked?"#f0a500":"currentColor"}" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            </button>
+            <button class="btn-view" onclick="openViewer('${esc(p.fileUrl)}','${esc(p.title)}','${p.id}')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              View Paper
+            </button>
+            ${isAdmin ? `
+            <button class="btn-visibility ${isHidden?"btn-hidden":""}" onclick="toggleHidden('${p.id}',${isHidden})" title="${isHidden?"Private — click to make public":"Public — click to hide"}">
+              ${isHidden
+                ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`
+                : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`
+              }
+            </button>
+            <button class="btn-edit" onclick="openEditModal('${p.id}')" title="Edit">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+            <button class="btn-del" onclick="deletePaper('${p.id}')" title="Delete">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+            </button>` : ""}
+          </div>
+        </div>`;
+      });
+      html += `</div></div>`;
+    }
+    cont.innerHTML = html;
+  }
+  window.renderPapers = renderPapers;
+
+  window.toggleHidden = async (id, currentlyHidden) => {
+    if (!isAdmin) return;
+    try {
+      await setDoc(doc(db, "papers", id), { hidden: !currentlyHidden }, { merge: true });
+      const p = allPapers.find(x => x.id === id);
+      if (p) p.hidden = !currentlyHidden;
+      showToast(!currentlyHidden ? "Paper hidden from users." : "Paper is now public.");
+      renderPapers();
+    } catch(e) { showToast("Error: " + e.message, "error"); }
+  };
+
+  let activeViewMode = "rows"; // "rows" | "grid" | "grid-sm"
+  let activeSection  = "papers"; // "papers" | "ai"
+
+  window.setViewMode = (mode) => {
+    activeViewMode = mode;
+    renderPapers();
+  };
+
+  window.setSection = (section) => {
+    activeSection = section;
+    document.querySelectorAll(".section-tab").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".section-tab[data-section='" + section + "']").forEach(b => b.classList.add("active"));
+    const filtersEl = document.querySelector(".papers-filters");
+    const searchEl  = document.getElementById("search-wrap");
+    if (filtersEl) filtersEl.style.display = section === "papers" ? "" : "none";
+    if (searchEl)  searchEl.style.display  = section === "papers" ? "" : "none";
+    renderPapers();
+  };
+  window.openViewer = (url, title, id) => {
+    const driveMatch = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    const embedUrl = driveMatch ? `https://drive.google.com/file/d/${driveMatch[1]}/preview?rm=minimal` : url;
+    document.getElementById("viewer-title").textContent = title;
+    const frame = document.getElementById("viewer-frame");
+    frame.src = embedUrl;
+    frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
+    document.getElementById("viewer-modal").classList.add("open");
+    document.body.style.overflow = "hidden";
+    // Track recently viewed
+    if (id) addRecentlyViewed(id, title);
+  };
+  window.closeViewer = () => {
+    document.getElementById("viewer-modal").classList.remove("open");
+    document.getElementById("viewer-frame").src = "";
+    document.body.style.overflow = "";
+  };
+  window.deletePaper = async (id) => {
+    if (!isAdmin || !confirm("Remove this paper?")) return;
+    await deleteDoc(doc(db, "papers", id));
+    showToast("Paper removed.");
+    await loadPapers();
+  };
+
+  // ── EDIT PAPER ───────────────────────────────────────────────
+  window.openEditModal = (id) => {
+    const paper = allPapers.find(p => p.id === id);
+    if (!paper) return;
+    document.getElementById("edit-id").value = id;
+    document.getElementById("edit-extra").value = paper.extra || "";
+    document.getElementById("edit-url").value   = paper.fileUrl || "";
+    document.getElementById("edit-title-display").textContent = paper.title || "";
+    document.getElementById("edit-modal").classList.add("open");
+    document.body.style.overflow = "hidden";
+  };
+  window.closeEditModal = () => {
+    document.getElementById("edit-modal").classList.remove("open");
+    document.body.style.overflow = "";
+  };
+  window.savePaperEdit = async () => {
+    const id    = document.getElementById("edit-id").value;
+    const extra = document.getElementById("edit-extra").value.trim();
+    const url   = document.getElementById("edit-url").value.trim();
+    const btn   = document.getElementById("edit-save-btn");
+    if (!url) { showToast("File URL cannot be empty.", "error"); return; }
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      await setDoc(doc(db, "papers", id), { extra, fileUrl: url }, { merge: true });
+      showToast("✓ Paper updated!");
+      window.closeEditModal();
+      await loadPapers();
+    } catch (e) { showToast("Save failed: " + e.message, "error"); }
+    finally { btn.disabled = false; btn.textContent = "Save Changes"; }
+  };
+
+  // ── ANNOUNCEMENTS ────────────────────────────────────────────
+  async function loadAnnouncement() {
+    try {
+      const snap = await getDoc(doc(db, "config", "announcement"));
+      if (!snap.exists()) return;
+      const data = snap.data();
+      if (!data.message || !data.active) return;
+      if (data.expiresAt && data.expiresAt.toDate() < new Date()) return;
+      const dismissedKey = "ann_dismissed_" + (data.id || "default");
+      if (localStorage.getItem(dismissedKey)) return;
+      const bar = document.getElementById("ann-bar");
+      document.getElementById("ann-text").textContent = data.message;
+      bar.dataset.dismissKey = dismissedKey;
+      bar.style.display = "flex";
+    } catch(e) { console.error("Announcement error:", e); }
+  }
+  window.loadAnnouncement = loadAnnouncement;
+
+  window.dismissAnnouncement = () => {
+    const bar = document.getElementById("ann-bar");
+    const key = bar.dataset.dismissKey;
+    if (key) localStorage.setItem(key, "1");
+    bar.style.display = "none";
+  };
+
+  window.saveAnnouncement = async () => {
+    const msg    = document.getElementById("ann-admin-msg").value.trim();
+    const active = document.getElementById("ann-admin-active").checked;
+    const expStr = document.getElementById("ann-admin-expiry").value;
+    const btn    = document.getElementById("ann-save-btn");
+    const annId  = "ann_" + Date.now();
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      const payload = { message: msg, active, id: annId, updatedAt: new Date() };
+      payload.expiresAt = expStr ? new Date(expStr) : deleteField();
+      await setDoc(doc(db, "config", "announcement"), payload);
+      showToast("✓ Announcement saved!");
+    } catch(e) { showToast("Save failed: " + e.message, "error"); }
+    finally { btn.disabled = false; btn.textContent = "Save Announcement"; }
+  };
+
+  async function loadAnnouncementAdmin() {
+    try {
+      const snap = await getDoc(doc(db, "config", "announcement"));
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const msgEl    = document.getElementById("ann-admin-msg");
+      const activeEl = document.getElementById("ann-admin-active");
+      const expEl    = document.getElementById("ann-admin-expiry");
+      if (msgEl)    msgEl.value    = data.message || "";
+      if (activeEl) activeEl.checked = data.active !== false;
+      if (expEl && data.expiresAt) {
+        const d = data.expiresAt.toDate();
+        const pad = n => String(n).padStart(2,"0");
+        expEl.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+    } catch(e) { console.error("loadAnnouncementAdmin error:", e); }
+  }
+
+  // ── ADMIN ────────────────────────────────────────────────────
+  function initAdmin() {
+    loadRequests();
+    loadUsers();
+    updateAddSubjectDropdown();
+    updateAddPaperDropdown();
+    loadAnnouncementAdmin();
+  }
+  window.initAdmin = initAdmin;
+
+  window.updateAddSubjectDropdown = () => {
+    const type = document.getElementById("a-type").value;
+    const subjects = type === "CSEC" ? CSEC_SUBJECTS : CAPE_SUBJECTS;
+    document.getElementById("a-subject").innerHTML =
+      `<option value="">— Select Subject —</option>` +
+      subjects.map(s => `<option value="${esc(s)}">${s}</option>`).join("");
+    updateAddPaperDropdown();
+  };
+  window.updateAddPaperDropdown = () => {
+    const type = document.getElementById("a-type").value;
+    const papers = type === "CSEC" ? CSEC_PAPERS : CAPE_PAPERS;
+    document.getElementById("a-paper").innerHTML =
+      `<option value="">— Select Paper —</option>` +
+      papers.map(p => `<option value="${esc(p)}">${p}</option>`).join("");
+  };
+
+  window.addPaper = async () => {
+    const type    = document.getElementById("a-type").value;
+    const subject = document.getElementById("a-subject").value;
+    const paper   = document.getElementById("a-paper").value;
+    const session = document.getElementById("a-session").value;
+    const year    = document.getElementById("a-year").value.trim();
+    const fileUrl = document.getElementById("a-url").value.trim();
+    const extra   = document.getElementById("a-extra").value.trim();
+    if (!subject) { showToast("Please select a subject.", "error"); return; }
+    if (!fileUrl) { showToast("Please enter a file URL.", "error"); return; }
+    const sessionYear = [session, year].filter(Boolean).join(" ");
+    const title = [subject, paper, sessionYear].filter(Boolean).join(" — ");
+    try {
+      await addDoc(collection(db, "papers"), { type, subject, paper, session, year, title, fileUrl, extra, addedAt: new Date() });
+      showToast("✓ Paper added!");
+      ["a-subject","a-paper","a-session","a-year","a-url","a-extra"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { if (el.tagName === "SELECT") el.selectedIndex = 0; else el.value = ""; }
+      });
+      await loadPapers();
+    } catch(e) { showToast("Failed to add paper: " + e.message, "error"); }
+  };
+
+  // ── REQUESTS ─────────────────────────────────────────────────
+  async function loadRequests() {
+    const el = document.getElementById("requests-list");
+    el.innerHTML = `<div class="spinner small"></div>`;
+    const snap = await getDocs(collection(db, "accessRequests"));
+    if (snap.empty) { el.innerHTML = `<p class="muted-msg">No requests yet.</p>`; return; }
+    const docs = [];
+    snap.forEach(d => docs.push({ id: d.id, ...d.data() }));
+    docs.sort((a,b) => (a.status==="pending"&&b.status!=="pending") ? -1 : (a.status!=="pending"&&b.status==="pending") ? 1 : 0);
+    renderRequests(docs);
+  }
+  window.loadRequests = loadRequests;
+
+  function renderRequests(docs) {
+    const el = document.getElementById("requests-list");
+    el.innerHTML = docs.map(r => `
+      <div class="req-card ${r.status!=="pending"?"req-done":""}">
+        <div class="req-info">
+          <div class="req-name">${esc(r.name||"—")}</div>
+          <div class="req-row"><span class="req-label">Email</span><span>${esc(r.email||r.googleEmail||"—")}</span></div>
+          ${r.note ? `<div class="req-row"><span class="req-label">Note</span><span class="muted">${esc(r.note)}</span></div>` : ""}
+          <div class="req-row"><span class="req-label">Submitted</span><span class="muted">${r.createdAt?.toDate?.().toLocaleString()||"—"}</span></div>
+        </div>
+        <div class="req-btns">
+          ${r.status==="pending"
+            ? `<button class="btn-approve" onclick="approveRequest('${r.id}','${r.userId}')">✓ Approve</button>
+               <button class="btn-deny"    onclick="denyRequest('${r.id}')">✗ Deny</button>`
+            : `<span class="status-badge ${r.status}">${r.status==="approved"?"✓ Approved":"✗ Denied"}</span>`}
+        </div>
+      </div>`).join("") || `<p class="muted-msg">No requests yet.</p>`;
+  }
+
+  window.approveRequest = async (reqId, userId) => {
+    if (!userId) { showToast("No user ID found.", "error"); return; }
+    try {
+      await setDoc(doc(db, "users", userId), { access: true }, { merge: true });
+      await setDoc(doc(db, "accessRequests", reqId), { status: "approved" }, { merge: true });
+      showToast("✓ Access granted!");
+      await loadRequests();
+      await loadUsers();
+    } catch(e) { showToast("Error: " + e.message, "error"); }
+  };
+  window.denyRequest = async (reqId) => {
+    try {
+      await setDoc(doc(db, "accessRequests", reqId), { status: "denied" }, { merge: true });
+      showToast("Request denied.");
+      await loadRequests();
+    } catch(e) { showToast("Error: " + e.message, "error"); }
+  };
+
+  // ── USERS ────────────────────────────────────────────────────
+  async function loadUsers() {
+    const el = document.getElementById("users-list");
+    el.innerHTML = `<div class="spinner small"></div>`;
+    const snap = await getDocs(collection(db, "users"));
+    allUsersCache = [];
+    snap.forEach(d => allUsersCache.push({ uid: d.id, ...d.data() }));
+    renderUsers(allUsersCache);
+  }
+  window.loadUsers = loadUsers;
+
+  window.searchUsers = () => {
+    const q = document.getElementById("user-search").value.trim().toLowerCase();
+    renderUsers(q ? allUsersCache.filter(u => (u.email||"").toLowerCase().includes(q)||(u.name||"").toLowerCase().includes(q)) : allUsersCache);
+  };
+
+  window.searchRequests = async () => {
+    const q = document.getElementById("req-search").value.trim().toLowerCase();
+    const snap = await getDocs(collection(db, "accessRequests"));
+    const docs = [];
+    snap.forEach(d => docs.push({ id: d.id, ...d.data() }));
+    const filtered = q ? docs.filter(r => (r.email||"").toLowerCase().includes(q)||(r.name||"").toLowerCase().includes(q)||(r.note||"").toLowerCase().includes(q)) : docs;
+    filtered.sort((a,b) => (a.status==="pending"&&b.status!=="pending")?-1:(a.status!=="pending"&&b.status==="pending")?1:0);
+    renderRequests(filtered);
+  };
+
+  function renderUsers(users) {
+    const el = document.getElementById("users-list");
+    if (!users.length) { el.innerHTML = `<p class="muted-msg">No users found.</p>`; return; }
+    el.innerHTML = `<table class="users-table">
+      <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${users.map(u => `<tr>
+        <td>${esc(u.name||"—")}</td>
+        <td class="muted small">${esc(u.email||u.uid)}</td>
+        <td><span class="pill ${u.access?"pill-green":"pill-gray"}">${u.access?"Active":"Pending"}</span></td>
+        <td>
+          ${u.email===ADMIN_EMAIL ? `<span class="pill pill-blue">Admin</span>` : ""}
+          ${!u.access&&u.email!==ADMIN_EMAIL ? `<button class="btn-sm-green" onclick="grantAccess('${u.uid}')">Grant</button>` : ""}
+          ${u.access&&u.email!==ADMIN_EMAIL  ? `<button class="btn-sm-red"   onclick="revokeAccess('${u.uid}')">Revoke</button>` : ""}
+        </td>
+      </tr>`).join("")}</tbody>
+    </table>`;
+  }
+
+  window.grantAccess = async (uid) => {
+    try {
+      await setDoc(doc(db, "users", uid), { access: true }, { merge: true });
+      showToast("✓ Access granted!");
+      await loadUsers();
+    } catch(e) { showToast("Error: " + e.message, "error"); }
+  };
+  // ── SEARCH ──────────────────────────────────────────────────
+  let searchQuery = "";
+
+  window.onSearchInput = (val) => {
+    searchQuery = val.trim().toLowerCase();
+    const clearBtn = document.getElementById("search-clear");
+    if (clearBtn) clearBtn.classList.toggle("visible", searchQuery.length > 0);
+    renderPapers();
+  };
+  window.clearSearch = () => {
+    const inp = document.getElementById("search-input");
+    if (inp) inp.value = "";
+    searchQuery = "";
+    const clearBtn = document.getElementById("search-clear");
+    if (clearBtn) clearBtn.classList.remove("visible");
+    document.getElementById("search-count").textContent = "";
+    renderPapers();
+  };
+
+  // Patch renderPapers to apply search filter and show result count
+  const _origRenderPapers = renderPapers;
+  renderPapers = function() {
+    // Reset searchQuery filtering is done inside renderPapers by reassigning filtered
+    _origRenderPapers();
+    // Apply search on top of rendered result if query exists
+    if (searchQuery) {
+      applySearchFilter();
+    } else {
+      document.getElementById("search-count").textContent = "";
+    }
+    renderRecentlyViewed();
+    renderSavedPapers();
+  };
+  window.renderPapers = renderPapers;
+
+  function applySearchFilter() {
+    const cards = document.querySelectorAll("#papers-content .paper-card");
+    let visible = 0;
+    cards.forEach(card => {
+      const text = card.textContent.toLowerCase();
+      const match = text.includes(searchQuery);
+      card.style.display = match ? "" : "none";
+      if (match) visible++;
+    });
+    // Hide empty subject groups
+    document.querySelectorAll("#papers-content .subject-group").forEach(g => {
+      const any = [...g.querySelectorAll(".paper-card")].some(c => c.style.display !== "none");
+      g.style.display = any ? "" : "none";
+    });
+    const countEl = document.getElementById("search-count");
+    if (countEl) countEl.textContent = `${visible} result${visible!==1?"s":""} for "${searchQuery}"`;
+  }
+
+  // ── BOOKMARKS ────────────────────────────────────────────────
+  function getBookmarks() {
+    try { return JSON.parse(localStorage.getItem("cxc_bookmarks")||"[]"); } catch { return []; }
+  }
+  function saveBookmarks(arr) {
+    localStorage.setItem("cxc_bookmarks", JSON.stringify(arr));
+  }
+  function isStarred(id) {
+    return getBookmarks().includes(id);
+  }
+  window.toggleBookmark = (id) => {
+    let bm = getBookmarks();
+    if (bm.includes(id)) {
+      bm = bm.filter(x => x !== id);
+      showToast("Bookmark removed.");
+    } else {
+      bm.unshift(id);
+      showToast("⭐ Paper bookmarked!");
+    }
+    saveBookmarks(bm);
+    renderPapers();
+  };
+  window.clearAllBookmarks = () => {
+    if (!confirm("Clear all saved papers?")) return;
+    saveBookmarks([]);
+    renderPapers();
+    showToast("Bookmarks cleared.");
+  };
+
+  function renderSavedPapers() {
+    const bm = getBookmarks();
+    const sec = document.getElementById("saved-section");
+    const list = document.getElementById("saved-list");
+    if (!sec||!list) return;
+    const saved = bm.map(id => allPapers.find(p => p.id===id)).filter(Boolean);
+    if (saved.length===0) { sec.style.display="none"; return; }
+    sec.style.display="block";
+    list.innerHTML = saved.map(p => {
+      const ex = esc(p.extra||"");
+      return `<div class="paper-card">
+        <div class="paper-left">
+          <span class="type-badge ${(p.type||"csec").toLowerCase()}">${p.type||"CSEC"}</span>
+          <div class="paper-info">
+            <div class="paper-title">${esc(p.title)}</div>
+            ${ex?`<div class="paper-extra">${ex}</div>`:""}
+          </div>
+        </div>
+        <div class="paper-right">
+          <button class="bookmark-btn starred" onclick="toggleBookmark('${p.id}')" title="Remove bookmark">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="#f0a500" stroke="#f0a500" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          </button>
+          <button class="btn-view" onclick="openViewer('${esc(p.fileUrl)}','${esc(p.title)}','${p.id}')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            View Paper
+          </button>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  // ── RECENTLY VIEWED ──────────────────────────────────────────
+  function getRecentlyViewed() {
+    try { return JSON.parse(localStorage.getItem("cxc_recent")||"[]"); } catch { return []; }
+  }
+  function addRecentlyViewed(id, title) {
+    let recent = getRecentlyViewed().filter(x => x.id !== id);
+    recent.unshift({ id, title, viewedAt: Date.now() });
+    recent = recent.slice(0, 5);
+    localStorage.setItem("cxc_recent", JSON.stringify(recent));
+    renderRecentlyViewed();
+  }
+  function renderRecentlyViewed() {
+    const sec  = document.getElementById("recently-section");
+    const list = document.getElementById("recently-list");
+    if (!sec||!list) return;
+    const recent = getRecentlyViewed();
+    const valid  = recent.filter(r => allPapers.find(p => p.id===r.id));
+    if (valid.length===0) { sec.style.display="none"; return; }
+    sec.style.display="block";
+    list.innerHTML = valid.map(r => {
+      const paper = allPapers.find(p => p.id===r.id);
+      const sub = [paper?.type, paper?.paper].filter(Boolean).join(" · ");
+      return `<div class="recently-card" onclick="openViewer('${esc(paper?.fileUrl||"")}','${esc(r.title)}','${r.id}')">
+        <div class="recently-card-title">${esc(r.title)}</div>
+        <div class="recently-card-sub">${esc(sub)}</div>
+      </div>`;
+    }).join("");
+  }
+
+  // ── DARK MODE ────────────────────────────────────────────────
+  function applyDarkMode(dark) {
+    document.body.classList.toggle("dark", dark);
+    const btn = document.getElementById("darkmode-btn");
+    if (btn) btn.textContent = dark ? "☀️" : "🌙";
+  }
+  // Load preference on init
+  (function() {
+    const saved = localStorage.getItem("cxc_dark");
+    if (saved === "1") applyDarkMode(true);
+  })();
+  window.toggleDarkMode = () => {
+    const isDark = document.body.classList.toggle("dark");
+    localStorage.setItem("cxc_dark", isDark ? "1" : "0");
+    const btn = document.getElementById("darkmode-btn");
+    if (btn) btn.textContent = isDark ? "☀️" : "🌙";
+  };
+
+  // ── ANNOTATIONS ─────────────────────────────────────────────
+  // ── ANNOTATIONS ─────────────────────────────────────────────
+  let annMode=false, annTool="draw", annColor="#1a4d8f", annSize=3;
+  let annDrawing=false, annCurrentStroke=null;
+  let annStrokes=[], annTextboxes=[], annCurrentPaperId=null;
+
+  function annKey(){ return `cxc_ann_${currentUser?.uid||"x"}_${annCurrentPaperId}`; }
+
+  function loadAnnotations(){
+    try{
+      const d=JSON.parse(localStorage.getItem(annKey())||"{}");
+      annStrokes=d.strokes||[]; annTextboxes=d.textboxes||[];
+    } catch{ annStrokes=[]; annTextboxes=[]; }
+  }
+
+  window.saveAnnotations=()=>{
+    annTextboxes.forEach(tb=>{
+      const el=document.getElementById("tb-"+tb.id); if(!el) return;
+      tb.text=el.querySelector("textarea")?.value||tb.text;
+      const inner=document.getElementById("viewer-inner");
+      const iw=inner.offsetWidth||1, ih=inner.offsetHeight||1;
+      tb.xp=(parseFloat(el.style.left)/iw*100).toFixed(4);
+      tb.yp=(parseFloat(el.style.top) /ih*100).toFixed(4);
+    });
+    localStorage.setItem(annKey(), JSON.stringify({strokes:annStrokes,textboxes:annTextboxes}));
+    showToast("✓ Annotations saved!");
+  };
+
+  window.clearAnnotations=()=>{
+    if(!confirm("Clear all annotations for this paper?")) return;
+    annStrokes=[]; annTextboxes=[];
+    localStorage.removeItem(annKey());
+    redrawCanvas();
+    const c=document.getElementById("ann-textboxes"); if(c) c.innerHTML="";
+    showToast("Annotations cleared.");
+  };
+
+  function getInnerSize(){
+    const el=document.getElementById("viewer-inner");
+    return el ? {w:el.offsetWidth||800, h:el.offsetHeight||1400} : {w:800,h:1400};
+  }
+
+  function sizeCanvas(){
+    const cv=document.getElementById("ann-canvas");
+    const inner=document.getElementById("viewer-inner");
+    if(!cv||!inner) return;
+    const w=inner.offsetWidth, h=inner.offsetHeight;
+    if(!w||!h) return;
+    cv.width=w; cv.height=h;
+    // CSS size matches — canvas is 100% via CSS already
+    redrawCanvas();
+  }
+
+  function redrawCanvas(){
+    const cv=document.getElementById("ann-canvas"); if(!cv||!cv.width) return;
+    const ctx=cv.getContext("2d");
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const {w,h}=getInnerSize();
+    annStrokes.forEach(s=>{
+      if(!s.pts||s.pts.length<2) return;
+      ctx.save();
+      ctx.globalCompositeOperation=s.tool==="erase"?"destination-out":"source-over";
+      ctx.strokeStyle=s.tool==="erase"?"rgba(0,0,0,1)":s.color;
+      ctx.lineWidth=s.size; ctx.lineCap="round"; ctx.lineJoin="round";
+      ctx.beginPath();
+      ctx.moveTo(s.pts[0][0]/100*w, s.pts[0][1]/100*h);
+      for(let i=1;i<s.pts.length;i++) ctx.lineTo(s.pts[i][0]/100*w, s.pts[i][1]/100*h);
+      ctx.stroke(); ctx.restore();
+    });
+  }
+
+  function escHtml(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+  function renderTextboxes(){
+    const c=document.getElementById("ann-textboxes"); if(!c) return;
+    c.innerHTML="";
+    const {w,h}=getInnerSize();
+    annTextboxes.forEach(tb=>{
+      const xpx=(parseFloat(tb.xp)||0)/100*w;
+      const ypx=(parseFloat(tb.yp)||0)/100*h;
+      const node=document.createElement("div");
+      node.className="ann-textnode"; node.id="tb-"+tb.id;
+      node.style.cssText=`left:${xpx}px;top:${ypx}px;position:absolute;width:${tb.w||"180px"};pointer-events:${annMode?"all":"none"};`;
+      node.innerHTML=`
+        <div class="ann-textnode-bar" style="display:${annMode?"flex":"none"};">
+          <span class="ann-textnode-move">✥</span>
+          <button class="ann-textnode-btn" onclick="deleteTextbox('${tb.id}')">✕</button>
+        </div>
+        <textarea style="color:${tb.color||annColor};border:${annMode?"1.5px dashed rgba(0,0,0,0.35)":"none"};" placeholder="${annMode?"Type here…":""}">${escHtml(tb.text)}</textarea>`;
+      // Drag handle
+      const bar=node.querySelector(".ann-textnode-move");
+      let ox=0,oy=0,sx=0,sy=0;
+      bar.addEventListener("mousedown",e=>{
+        e.preventDefault(); sx=e.clientX; sy=e.clientY;
+        const ir=document.getElementById("viewer-inner").getBoundingClientRect();
+        const nr=node.getBoundingClientRect();
+        ox=nr.left-ir.left; oy=nr.top-ir.top;
+        const mm=e2=>{ node.style.left=(ox+e2.clientX-sx)+"px"; node.style.top=(oy+e2.clientY-sy)+"px"; };
+        const mu=()=>{ document.removeEventListener("mousemove",mm); document.removeEventListener("mouseup",mu); };
+        document.addEventListener("mousemove",mm); document.addEventListener("mouseup",mu);
+      });
+      c.appendChild(node);
+    });
+  }
+
+  window.deleteTextbox=(id)=>{ annTextboxes=annTextboxes.filter(t=>t.id!==id); renderTextboxes(); };
+
+  function setPointers(){
+    const cv=document.getElementById("ann-canvas");
+    const tbc=document.getElementById("ann-textboxes");
+    const frame=document.getElementById("viewer-frame");
+    if(!cv||!tbc||!frame) return;
+    if(!annMode){
+      cv.style.pointerEvents="none"; cv.style.cursor="default";
+      tbc.style.pointerEvents="none";
+      frame.style.pointerEvents="all"; // iframe scrolls normally
+    } else if(annTool==="text"){
+      cv.style.pointerEvents="none"; cv.style.cursor="text";
+      tbc.style.pointerEvents="all";
+      frame.style.pointerEvents="none"; // block iframe so outer div scrolls
+    } else {
+      cv.style.pointerEvents="all"; cv.style.cursor=annTool==="erase"?"cell":"crosshair";
+      tbc.style.pointerEvents="none";
+      frame.style.pointerEvents="none"; // block iframe so outer div scrolls
+    }
+  }
+
+  window.toggleAnnotateMode=()=>{
+    annMode=!annMode;
+    document.getElementById("annotate-toggle-btn")?.classList.toggle("active",annMode);
+    const toolbar=document.getElementById("ann-toolbar");
+    if(toolbar) toolbar.style.display=annMode?"flex":"none";
+    if(annMode) sizeCanvas();
+    setPointers();
+    renderTextboxes();
+  };
+
+  window.setAnnTool=(t)=>{
+    annTool=t;
+    document.querySelectorAll(".ann-tool").forEach(b=>b.classList.remove("active"));
+    document.getElementById("tool-"+t)?.classList.add("active");
+    setPointers();
+  };
+  window.setAnnColor=(c,el)=>{ annColor=c; document.querySelectorAll(".ann-color").forEach(b=>b.classList.remove("active")); el?.classList.add("active"); };
+  window.setAnnSize=(v)=>{ annSize=parseInt(v); const el=document.getElementById("ann-size-val"); if(el) el.textContent=v; };
+
+  function getPct(e){
+    const cv=document.getElementById("ann-canvas");
+    const r=cv.getBoundingClientRect();
+    const cx=e.touches?e.touches[0].clientX:e.clientX;
+    const cy=e.touches?e.touches[0].clientY:e.clientY;
+    return[ ((cx-r.left)/r.width*100), ((cy-r.top)/r.height*100) ];
+  }
+
+  function startDraw(e){
+    if(!annMode||annTool==="text") return;
+    e.preventDefault();
+    annDrawing=true;
+    annCurrentStroke={tool:annTool,color:annColor,size:annSize,pts:[getPct(e)]};
+  }
+  function moveDraw(e){
+    if(!annDrawing||!annCurrentStroke) return;
+    e.preventDefault();
+    const p=getPct(e);
+    annCurrentStroke.pts.push(p);
+    const cv=document.getElementById("ann-canvas");
+    const ctx=cv.getContext("2d");
+    const pts=annCurrentStroke.pts;
+    const {w,h}=getInnerSize();
+    ctx.save();
+    ctx.globalCompositeOperation=annCurrentStroke.tool==="erase"?"destination-out":"source-over";
+    ctx.strokeStyle=annCurrentStroke.tool==="erase"?"rgba(0,0,0,1)":annCurrentStroke.color;
+    ctx.lineWidth=annCurrentStroke.size; ctx.lineCap="round"; ctx.lineJoin="round";
+    ctx.beginPath();
+    ctx.moveTo(pts[pts.length-2][0]/100*w, pts[pts.length-2][1]/100*h);
+    ctx.lineTo(pts[pts.length-1][0]/100*w, pts[pts.length-1][1]/100*h);
+    ctx.stroke(); ctx.restore();
+  }
+  function endDraw(){
+    if(!annDrawing) return; annDrawing=false;
+    if(annCurrentStroke&&annCurrentStroke.pts.length>1) annStrokes.push(annCurrentStroke);
+    annCurrentStroke=null;
+  }
+
+  function initAnnotationEvents(){
+    const cv=document.getElementById("ann-canvas");
+    const tbc=document.getElementById("ann-textboxes");
+    if(cv&&!cv._annInit){
+      cv._annInit=true;
+      cv.addEventListener("mousedown",startDraw);
+      cv.addEventListener("mousemove",moveDraw);
+      cv.addEventListener("mouseup",endDraw);
+      cv.addEventListener("mouseleave",endDraw);
+      cv.addEventListener("touchstart",startDraw,{passive:false});
+      cv.addEventListener("touchmove",moveDraw,{passive:false});
+      cv.addEventListener("touchend",endDraw);
+    }
+    if(tbc&&!tbc._annInit){
+      tbc._annInit=true;
+      tbc.addEventListener("click",e=>{
+        if(!annMode||annTool!=="text"||e.target.closest(".ann-textnode")) return;
+        const inner=document.getElementById("viewer-inner");
+        const ir=inner.getBoundingClientRect();
+        const iw=inner.offsetWidth||1, ih=inner.offsetHeight||1;
+        const xpx=e.clientX-ir.left, ypx=e.clientY-ir.top;
+        const id="tb"+Date.now();
+        annTextboxes.push({
+          id,
+          xp:(xpx/iw*100).toFixed(4),
+          yp:(ypx/ih*100).toFixed(4),
+          w:"180px", color:annColor, text:""
+        });
+        renderTextboxes();
+        setTimeout(()=>document.getElementById("tb-"+id)?.querySelector("textarea")?.focus(),30);
+      });
+    }
+  }
+
+  const _baseOpenViewer=window.openViewer;
+  window.openViewer=(url,title,id)=>{
+    annCurrentPaperId=id||null; annMode=false;
+    _baseOpenViewer(url,title,id);
+    setTimeout(()=>{
+      document.getElementById("annotate-toggle-btn")?.classList.remove("active");
+      const toolbar=document.getElementById("ann-toolbar"); if(toolbar) toolbar.style.display="none";
+      const cv=document.getElementById("ann-canvas");
+      const tbc=document.getElementById("ann-textboxes");
+      const frame=document.getElementById("viewer-frame");
+      if(cv){ cv._annInit=false; cv.width=0; cv.height=0; }
+      if(tbc){ tbc._annInit=false; tbc.innerHTML=""; }
+      if(frame) frame.style.pointerEvents="all";
+      loadAnnotations();
+      initAnnotationEvents();
+      sizeCanvas();
+      setPointers();
+      renderTextboxes(); // show saved textboxes immediately (transparent, no handles)
+    },300);
+  };
+
+  window.addEventListener("resize",()=>{
+    if(document.getElementById("viewer-modal")?.classList.contains("open")){
+      sizeCanvas(); renderTextboxes();
+    }
+  });
+</script>
+
+<style>
+  :root {
+    --white:#ffffff; --off:#f8f7f4; --cream:#f0ede7; --card:#ffffff;
+    --border:#e6e1d9; --border2:#cdc8bf;
+    --text:#18160f; --text2:#5c5549; --text3:#9c958b;
+    --green:#2d6a4f; --green-lt:#e8f5ef; --green-dk:#1e4f3a; --green-hv:#235c42; --green-mid:#3a8262;
+    --csec:#1a4d8f; --csec-lt:#edf2fb; --csec-dk:#0f2d57;
+    --cape:#7b3800; --cape-lt:#fdf2e9;
+    --red:#b93325; --red-lt:#fdf0ee;
+    --gold:#b8860b; --gold-lt:#fff8e1;
+    --teal:#0e7490; --teal-lt:#ecfeff;
+    --shadow:0 2px 12px rgba(0,0,0,0.07); --shadow-md:0 6px 24px rgba(0,0,0,0.09); --shadow-lg:0 16px 48px rgba(0,0,0,0.12);
+    --r:12px; --r-sm:8px; --r-xs:6px; --r-lg:20px; --r-xl:28px;
+    --font-d:'Playfair Display',Georgia,serif; --font:'DM Sans',system-ui,sans-serif;
+  }
+  body.dark {
+    --white:#1e1e1e; --off:#161616; --cream:#252525; --card:#1e1e1e;
+    --border:#2e2e2e; --border2:#3a3a3a;
+    --text:#f0ede7; --text2:#b0a898; --text3:#6e6860;
+    --green:#3a8262; --green-lt:#1a2e25; --green-dk:#2d6a4f; --green-hv:#4a9972; --green-mid:#4aaa82;
+    --csec:#3a6bbf; --csec-lt:#1a2540; --csec-dk:#5080d0;
+    --cape:#c97b30; --cape-lt:#2a1a08;
+    --red:#d9534f; --red-lt:#2a1010;
+    --gold:#d4a017; --gold-lt:#1e1a08;
+    --shadow:0 2px 12px rgba(0,0,0,0.3); --shadow-md:0 6px 24px rgba(0,0,0,0.4); --shadow-lg:0 16px 48px rgba(0,0,0,0.5);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:var(--font);background:var(--off);color:var(--text);min-height:100vh;line-height:1.6;}
+  .screen{display:none;min-height:100vh;flex-direction:column;}
+  .screen.active{display:flex;}
+
+  /* ── TOPBAR ── */
+  .topbar{
+    background:var(--white);border-bottom:1px solid var(--border);
+    padding:0 28px;height:58px;display:flex;align-items:center;gap:12px;
+    position:sticky;top:0;z-index:100;flex-shrink:0;
+  }
+  .brand{font-family:var(--font-d);font-size:1.15rem;font-weight:700;flex:1;display:flex;align-items:center;gap:8px;}
+  .brand-accent{color:var(--green);}
+  .brand-tag{font-size:.65rem;font-family:var(--font);font-weight:500;color:var(--text3);font-style:italic;margin-left:2px;}
+  .topbar-right{display:flex;align-items:center;gap:8px;}
+  .chip{display:flex;align-items:center;gap:7px;background:var(--off);border:1px solid var(--border);border-radius:999px;padding:4px 12px 4px 5px;font-size:.8rem;color:var(--text2);}
+  .avatar{width:24px;height:24px;background:linear-gradient(135deg,var(--green),var(--green-mid));border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.68rem;color:white;font-weight:700;}
+  .btn-top{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);background:var(--white);border-radius:var(--r-sm);padding:6px 12px;font-size:.78rem;font-family:var(--font);cursor:pointer;color:var(--text2);font-weight:500;transition:all .15s;}
+  .btn-top:hover{background:var(--off);color:var(--text);}
+  .btn-top.g{background:var(--green);color:white;border-color:var(--green);}
+  .btn-top.g:hover{background:var(--green-hv);}
+
+  /* Dark mode toggle */
+  .btn-darkmode{width:34px;height:34px;border:1px solid var(--border);background:var(--white);border-radius:var(--r-sm);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;transition:all .15s;color:var(--text2);flex-shrink:0;}
+  .btn-darkmode:hover{background:var(--off);color:var(--text);}
+
+  /* Search bar */
+  .papers-search-wrap{padding:14px 20px 2px;background:var(--white);border-bottom:1px solid var(--border);}
+  .papers-search-inner{max-width:960px;margin:0 auto;position:relative;}
+  .papers-search-input{width:100%;border:1.5px solid var(--border);border-radius:var(--r-sm);padding:10px 14px 10px 40px;font-size:.9rem;font-family:var(--font);color:var(--text);background:var(--off);outline:none;transition:border-color .2s,box-shadow .2s;}
+  .papers-search-input:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(45,106,79,.1);background:var(--white);}
+  .papers-search-icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--text3);pointer-events:none;}
+  .papers-search-clear{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text3);font-size:1rem;line-height:1;display:none;}
+  .papers-search-clear.visible{display:block;}
+  .search-result-count{font-size:.74rem;color:var(--text3);margin-top:6px;padding-bottom:8px;}
+
+  /* Recently viewed */
+  .recently-section{max-width:960px;margin:20px auto 0;padding:0 20px;}
+  .recently-header{font-size:.7rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text3);margin-bottom:10px;}
+  .recently-list{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;}
+  .recently-list::-webkit-scrollbar{height:3px;}
+  .recently-list::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px;}
+  .recently-card{flex-shrink:0;background:var(--white);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px 14px;cursor:pointer;transition:all .15s;max-width:220px;min-width:160px;}
+  .recently-card:hover{border-color:var(--green);box-shadow:var(--shadow);transform:translateY(-1px);}
+  .recently-card-title{font-size:.78rem;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .recently-card-sub{font-size:.7rem;color:var(--text3);margin-top:2px;}
+
+  /* Bookmarks */
+  .bookmark-btn{background:none;border:none;cursor:pointer;padding:3px;display:flex;align-items:center;justify-content:center;color:var(--text3);transition:color .15s;flex-shrink:0;}
+  .bookmark-btn:hover{color:#f0a500;}
+  .bookmark-btn.starred{color:#f0a500;}
+  .bookmark-btn svg{transition:fill .15s;}
+  .bookmark-btn.starred svg{fill:#f0a500;}
+
+  .saved-section{max-width:960px;margin:20px auto 0;padding:0 20px;}
+  .saved-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+  .saved-header-label{font-size:.7rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text3);}
+  .saved-clear-btn{font-size:.72rem;color:var(--text3);background:none;border:none;cursor:pointer;text-decoration:underline;font-family:var(--font);}
+  .saved-clear-btn:hover{color:var(--red);}
+  .btn-top.danger:hover{background:var(--red-lt);color:var(--red);border-color:#f0c0bb;}
+
+  /* ── LOGIN ── */
+  #screen-login{align-items:center;justify-content:center;background:var(--white);position:relative;overflow:hidden;}
+  .login-bg{position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse at 20% 50%,rgba(45,106,79,.08) 0%,transparent 55%),
+               radial-gradient(ellipse at 80% 20%,rgba(45,106,79,.05) 0%,transparent 50%),
+               radial-gradient(ellipse at 60% 80%,rgba(26,77,143,.04) 0%,transparent 40%);}
+  .login-wrap{position:relative;z-index:1;text-align:center;max-width:440px;width:92%;}
+  .login-logo{width:68px;height:68px;background:linear-gradient(135deg,var(--green),var(--green-mid));border-radius:18px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:28px;box-shadow:0 8px 24px rgba(45,106,79,.25);}
+  .login-logo svg{width:32px;height:32px;stroke:white;fill:none;stroke-width:1.7;}
+  .login-card{background:var(--white);border:1px solid var(--border);border-radius:var(--r-xl);padding:52px 44px;box-shadow:var(--shadow-lg);}
+  .login-card h1{font-family:var(--font-d);font-size:2rem;margin-bottom:6px;color:var(--text);}
+  .login-slogan{color:var(--green);font-size:.85rem;font-style:italic;font-weight:500;margin-bottom:8px;}
+  .login-card p{color:var(--text2);font-size:.88rem;margin-bottom:32px;}
+  .btn-google{display:flex;align-items:center;justify-content:center;gap:10px;background:var(--white);border:1.5px solid var(--border2);border-radius:var(--r-sm);padding:13px 20px;font-size:.92rem;font-family:var(--font);font-weight:500;color:var(--text);cursor:pointer;width:100%;transition:all .2s;}
+  .btn-google:hover{background:var(--off);border-color:var(--text3);transform:translateY(-1px);box-shadow:var(--shadow);}
+  .g-icon{width:20px;height:20px;}
+  .login-note{margin-top:24px;font-size:.76rem;color:var(--text3);line-height:1.9;}
+
+  /* ── WAITLIST ── */
+  #screen-waitlist{background:var(--off);}
+  .wl-body{max-width:560px;margin:40px auto;padding:0 20px;width:100%;}
+  .wl-hero{background:linear-gradient(135deg,var(--green-dk),var(--green));border-radius:var(--r-lg);padding:36px;text-align:center;margin-bottom:20px;color:white;box-shadow:0 8px 32px rgba(45,106,79,.3);}
+  .wl-hero-icon{font-size:2.4rem;margin-bottom:12px;}
+  .wl-hero h2{font-family:var(--font-d);font-size:1.6rem;margin-bottom:8px;color:white;}
+  .wl-hero p{font-size:.86rem;opacity:.85;line-height:1.7;}
+  .wl-card{background:var(--white);border:1px solid var(--border);border-radius:var(--r-lg);padding:36px;box-shadow:var(--shadow);margin-bottom:16px;}
+  .wl-card h3{font-family:var(--font-d);font-size:1.15rem;margin-bottom:6px;}
+  .wl-sub{color:var(--text2);font-size:.84rem;margin-bottom:24px;line-height:1.7;}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .fgroup{margin-bottom:16px;}
+  .fgroup label{display:block;font-size:.78rem;font-weight:600;color:var(--text2);margin-bottom:6px;letter-spacing:.02em;text-transform:uppercase;}
+  .fgroup input,.fgroup textarea{width:100%;border:1.5px solid var(--border);border-radius:var(--r-sm);padding:11px 13px;font-size:.9rem;font-family:var(--font);color:var(--text);background:var(--white);outline:none;transition:border-color .2s,box-shadow .2s;resize:vertical;}
+  .fgroup input:focus,.fgroup textarea:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(45,106,79,.1);}
+  .btn-submit{background:var(--green);color:white;border:none;border-radius:var(--r-sm);padding:14px;font-size:.95rem;font-family:var(--font);font-weight:600;cursor:pointer;width:100%;transition:all .2s;margin-top:4px;letter-spacing:.01em;}
+  .btn-submit:hover{background:var(--green-hv);transform:translateY(-1px);box-shadow:0 4px 16px rgba(45,106,79,.25);}
+  .btn-submit:disabled{opacity:.6;cursor:not-allowed;transform:none;}
+  .wl-pending{display:none;flex-direction:column;align-items:center;text-align:center;padding:12px 0;}
+  .pending-icon{font-size:3rem;margin-bottom:16px;}
+  .wl-pending h3{font-family:var(--font-d);font-size:1.25rem;margin-bottom:10px;color:var(--text);}
+  .wl-pending p{color:var(--text2);font-size:.88rem;line-height:1.9;}
+
+  /* Donation bar */
+  .donation-card{background:var(--gold-lt);border:1.5px solid #e8c84a;border-radius:var(--r-lg);padding:28px 32px;box-shadow:var(--shadow);display:flex;align-items:flex-start;gap:18px;}
+  .don-icon{font-size:2rem;flex-shrink:0;margin-top:2px;}
+  .don-content h4{font-family:var(--font-d);font-size:1rem;margin-bottom:6px;color:#4a3800;}
+  .don-content p{font-size:.83rem;color:#6b5000;line-height:1.8;}
+  .don-mmg{display:inline-flex;align-items:center;gap:8px;background:white;border:1.5px solid #e8c84a;border-radius:var(--r-sm);padding:10px 16px;margin-top:12px;cursor:pointer;font-family:var(--font);font-size:.85rem;font-weight:600;color:#4a3800;transition:all .15s;}
+  .don-mmg:hover{background:#fef9e7;border-color:#b8860b;}
+  .don-number{font-size:1.05rem;font-weight:700;font-family:monospace;background:#fff3b0;border-radius:4px;padding:2px 8px;letter-spacing:.05em;color:#4a3800;}
+
+  /* ── PAPERS ── */
+  #screen-papers{background:var(--off);}
+  .papers-hero{
+    background:linear-gradient(135deg,var(--green-dk) 0%,var(--green) 60%,var(--green-mid) 100%);
+    padding:32px 28px 28px; color:white; flex-shrink:0;
+  }
+  .papers-hero-inner{max-width:960px;margin:0 auto;}
+  .papers-hero h2{font-family:var(--font-d);font-size:1.6rem;margin-bottom:4px;}
+  .papers-hero p{font-size:.84rem;opacity:.8;}
+  .papers-filters{background:var(--white);border-bottom:1px solid var(--border);flex-shrink:0;padding:0 20px;}
+  .papers-filters-inner{max-width:960px;margin:0 auto;}
+  .filter-row{border-bottom:1px solid var(--border);padding:12px 0;}
+  .filter-row:last-child{border-bottom:none;}
+  .filter-label{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text3);margin-bottom:8px;}
+  #filter-type{display:flex;gap:6px;flex-wrap:wrap;}
+  .ftab{border:1.5px solid var(--border);background:var(--white);border-radius:999px;padding:6px 18px;font-size:.82rem;font-family:var(--font);cursor:pointer;color:var(--text2);font-weight:500;transition:all .15s;}
+  .ftab:hover{border-color:var(--green);color:var(--green);}
+  .ftab.active{background:var(--green);color:white;border-color:var(--green);}
+  .filter-scroll-wrap{position:relative;}
+  .filter-scroll-wrap::after{content:'';position:absolute;right:0;top:0;bottom:4px;width:40px;background:linear-gradient(to right,transparent,var(--white));pointer-events:none;border-radius:0 4px 4px 0;}
+  .filter-scroll{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;padding-right:44px;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;}
+  .filter-scroll::-webkit-scrollbar{height:4px;}
+  .filter-scroll::-webkit-scrollbar-track{background:transparent;}
+  .filter-scroll::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px;}
+  .filter-scroll::-webkit-scrollbar-thumb:hover{background:var(--text3);}
+  .ftag{border:1.5px solid var(--border);background:var(--white);border-radius:999px;padding:5px 14px;font-size:.78rem;font-family:var(--font);cursor:pointer;color:var(--text2);font-weight:500;transition:all .15s;white-space:nowrap;flex-shrink:0;}
+  .ftag:hover{border-color:var(--green);color:var(--green);}
+  .ftag.active{background:var(--green);color:white;border-color:var(--green);}
+  .ftag.sm{font-size:.74rem;padding:4px 12px;}
+
+  .papers-body{max-width:960px;margin:0 auto;padding:28px 20px;width:100%;}
+  .subject-group{margin-bottom:24px;}
+  .subject-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+  .subject-label{font-size:.72rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text3);}
+  .subject-count{font-size:.72rem;color:var(--text3);}
+  .papers-list{display:flex;flex-direction:column;gap:6px;}
+  .paper-card{background:var(--white);border:1px solid var(--border);border-radius:var(--r-sm);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;transition:all .15s;}
+  .paper-card:hover{border-color:var(--border2);box-shadow:var(--shadow);transform:translateY(-1px);}
+  .paper-left{display:flex;align-items:center;gap:12px;flex:1;min-width:0;}
+  .paper-right{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+  .type-badge{font-size:.65rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;border-radius:var(--r-xs);padding:3px 9px;flex-shrink:0;}
+  .type-badge.csec{background:var(--csec-lt);color:var(--csec);}
+  .type-badge.cape{background:var(--cape-lt);color:var(--cape);}
+  .paper-info{min-width:0;}
+  .paper-title{font-size:.9rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .paper-sub{font-size:.76rem;color:var(--text3);margin-top:2px;}
+  .btn-view{display:inline-flex;align-items:center;gap:6px;background:var(--green);color:white;border:none;border-radius:var(--r-sm);padding:7px 14px;font-size:.78rem;font-family:var(--font);font-weight:500;cursor:pointer;transition:all .15s;white-space:nowrap;}
+  .btn-view:hover{background:var(--green-hv);}
+  .btn-del{display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:var(--red-lt);color:var(--red);border:1px solid #f0c0bb;border-radius:var(--r-sm);cursor:pointer;transition:all .15s;}
+  .btn-del:hover{background:var(--red);color:white;}
+  .empty-state{text-align:center;padding:60px 20px;color:var(--text3);}
+  .empty-icon{font-size:3rem;margin-bottom:16px;}
+  .empty-title{font-size:1rem;font-weight:600;color:var(--text2);margin-bottom:8px;}
+  .empty-sub{font-size:.86rem;line-height:1.8;margin-bottom:18px;}
+  .btn-email-suggest{display:inline-flex;align-items:center;gap:8px;background:var(--green-lt);color:var(--green);border:1.5px solid #b2dfc7;border-radius:var(--r-sm);padding:10px 20px;font-size:.84rem;font-weight:600;font-family:var(--font);text-decoration:none;transition:all .15s;}
+  .btn-email-suggest:hover{background:var(--green);color:white;border-color:var(--green);}
+  .contact-bar{background:var(--cream);border:1px solid var(--border);border-radius:var(--r);padding:16px 22px;display:flex;align-items:center;justify-content:space-between;margin-top:16px;gap:12px;flex-wrap:wrap;}
+  .contact-bar p{font-size:.84rem;color:var(--text2);}
+
+  /* Donation bar in papers */
+  .donate-bar{background:var(--gold-lt);border:1.5px solid #e8c84a;border-radius:var(--r);padding:16px 22px;display:flex;align-items:center;gap:14px;margin-top:12px;flex-wrap:wrap;}
+  .donate-bar .don-text{flex:1;font-size:.84rem;color:#6b5000;line-height:1.7;}
+  .donate-bar .don-text strong{color:#4a3800;display:block;margin-bottom:2px;}
+  .btn-donate{display:inline-flex;align-items:center;gap:6px;background:#b8860b;color:white;border:none;border-radius:var(--r-sm);padding:9px 18px;font-size:.82rem;font-family:var(--font);font-weight:600;cursor:pointer;transition:.15s;white-space:nowrap;}
+  .btn-donate:hover{background:#996b00;}
+
+  /* ── VIEWER MODAL ── */
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:200;flex-direction:column;align-items:center;justify-content:center;padding:12px;}
+  .modal-overlay.open{display:flex;}
+  .modal-box{background:var(--white);border-radius:var(--r-lg);width:100%;max-width:1100px;height:92vh;display:flex;flex-direction:column;box-shadow:0 32px 80px rgba(0,0,0,.35);overflow:hidden;}
+  .modal-header{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-shrink:0;}
+  .modal-header h4{font-size:.9rem;font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .modal-close{width:30px;height:30px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--off);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;color:var(--text2);flex-shrink:0;transition:all .15s;}
+  .modal-close:hover{background:var(--red-lt);color:var(--red);border-color:#f0c0bb;}
+  .modal-note{padding:8px 18px;background:var(--gold-lt);border-bottom:1px solid #f0d060;font-size:.74rem;color:#6b5000;display:flex;align-items:center;gap:8px;flex-shrink:0;}
+
+  /* Annotation toolbar */
+  .btn-annotate{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);background:var(--white);border-radius:var(--r-sm);padding:6px 11px;font-size:.76rem;font-family:var(--font);cursor:pointer;color:var(--text2);font-weight:500;transition:all .15s;flex-shrink:0;}
+  .btn-annotate:hover,.btn-annotate.active{background:var(--green);color:white;border-color:var(--green);}
+  .ann-toolbar{display:flex;align-items:center;gap:10px;padding:8px 16px;background:var(--off);border-bottom:1px solid var(--border);flex-wrap:wrap;flex-shrink:0;}
+  .ann-tool-group{display:flex;align-items:center;gap:5px;}
+  .ann-tool{width:30px;height:30px;border:1.5px solid var(--border);border-radius:var(--r-sm);background:var(--white);cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--text2);transition:all .15s;}
+  .ann-tool:hover{border-color:var(--green);color:var(--green);}
+  .ann-tool.active{background:var(--green);color:white;border-color:var(--green);}
+  .ann-colors{gap:6px;}
+  .ann-color{width:20px;height:20px;border-radius:50%;border:2.5px solid transparent;cursor:pointer;transition:transform .15s,border-color .15s;flex-shrink:0;}
+  .ann-color:hover{transform:scale(1.15);}
+  .ann-color.active{border-color:var(--text);transform:scale(1.15);}
+  .ann-size-label{font-size:.72rem;color:var(--text3);white-space:nowrap;}
+  .ann-size-range{width:70px;accent-color:var(--green);cursor:pointer;}
+  .ann-size-num{font-size:.72rem;color:var(--text2);min-width:14px;text-align:center;}
+  .ann-action-btn{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border);background:var(--white);border-radius:var(--r-sm);padding:5px 10px;font-size:.74rem;font-family:var(--font);cursor:pointer;color:var(--text2);font-weight:500;transition:all .15s;}
+  .ann-action-btn:hover{background:var(--green-lt);color:var(--green);border-color:#b2dfc7;}
+  .ann-action-btn.danger:hover{background:var(--red-lt);color:var(--red);border-color:#f0c0bb;}
+
+  /* Viewer + canvas wrapper */
+  .viewer-wrap{flex:1;overflow-y:auto;overflow-x:hidden;position:relative;min-height:0;-webkit-overflow-scrolling:touch;}
+  .viewer-inner{position:relative;width:100%;height:1400px;} /* tall enough for a full PDF page */
+  #viewer-frame{position:absolute;inset:0;width:100%;height:100%;border:none;z-index:1;}
+  #ann-canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2;display:block;}
+  #ann-textboxes{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:3;overflow:visible;}
+
+  /* Text box nodes */
+  .ann-textnode{position:absolute;min-width:100px;}
+  .ann-textnode-bar{display:flex;gap:4px;margin-bottom:3px;align-items:center;}
+  .ann-textnode-move{cursor:move;background:rgba(45,106,79,0.15);border:1px solid rgba(45,106,79,0.3);border-radius:4px;padding:2px 8px;font-size:.68rem;color:var(--green-dk);user-select:none;flex:1;}
+  .ann-textnode-btn{background:rgba(185,51,37,0.1);border:1px solid rgba(185,51,37,0.3);border-radius:4px;padding:2px 8px;font-size:.68rem;font-family:var(--font);cursor:pointer;color:var(--red);transition:.15s;}
+  .ann-textnode-btn:hover{background:var(--red);color:white;}
+  .ann-textnode textarea{width:100%;min-height:36px;background:transparent;border:none;padding:4px 7px;font-family:var(--font);font-size:.92rem;font-weight:600;resize:both;outline:none;display:block;text-shadow:0 0 3px rgba(255,255,255,0.8), 0 1px 2px rgba(255,255,255,0.9);}
+
+  /* ── ADMIN ── */
+  #screen-admin{background:var(--off);}
+  .admin-body{max-width:1000px;margin:0 auto;padding:32px 20px;width:100%;}
+  .admin-head{margin-bottom:24px;}
+  .admin-head h2{font-family:var(--font-d);font-size:1.5rem;}
+  .admin-tabs{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:24px;}
+  .atab{padding:10px 22px;font-size:.86rem;font-family:var(--font);font-weight:500;cursor:pointer;border:none;background:none;color:var(--text2);border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s;}
+  .atab:hover{color:var(--text);}
+  .atab.active{color:var(--green);border-bottom-color:var(--green);}
+  .atab-panel{display:none;}
+  .atab-panel.active{display:block;}
+  .panel-card{background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:28px;box-shadow:var(--shadow);}
+  .panel-card h3{font-family:var(--font-d);font-size:1.05rem;margin-bottom:6px;}
+  .panel-desc{font-size:.82rem;color:var(--text2);margin-bottom:20px;line-height:1.7;}
+
+  .search-bar{display:flex;align-items:center;gap:8px;background:var(--off);border:1.5px solid var(--border);border-radius:var(--r-sm);padding:9px 14px;margin-bottom:20px;transition:border-color .2s;}
+  .search-bar:focus-within{border-color:var(--green);}
+  .search-bar svg{color:var(--text3);flex-shrink:0;}
+  .search-bar input{border:none;background:none;outline:none;font-size:.88rem;font-family:var(--font);color:var(--text);width:100%;}
+
+  .req-card{border:1px solid var(--border);border-radius:var(--r-sm);padding:18px;margin-bottom:10px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;background:var(--white);flex-wrap:wrap;transition:box-shadow .15s;}
+  .req-card:hover{box-shadow:var(--shadow);}
+  .req-card.req-done{background:var(--off);opacity:.65;}
+  .req-name{font-weight:600;font-size:.95rem;margin-bottom:8px;}
+  .req-row{display:flex;align-items:baseline;gap:8px;margin-bottom:4px;font-size:.82rem;}
+  .req-label{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);flex-shrink:0;min-width:90px;}
+  .req-btns{display:flex;gap:8px;flex-shrink:0;align-items:center;flex-wrap:wrap;}
+  .btn-approve{background:var(--green);color:white;border:none;border-radius:var(--r-sm);padding:8px 18px;font-size:.82rem;font-family:var(--font);font-weight:600;cursor:pointer;transition:.15s;}
+  .btn-approve:hover{background:var(--green-hv);}
+  .btn-deny{background:var(--red-lt);color:var(--red);border:1px solid #f0c0bb;border-radius:var(--r-sm);padding:8px 16px;font-size:.82rem;font-family:var(--font);font-weight:600;cursor:pointer;transition:.15s;}
+  .btn-deny:hover{background:var(--red);color:white;}
+  .status-badge{display:inline-block;border-radius:999px;padding:5px 14px;font-size:.76rem;font-weight:700;}
+  .status-badge.approved{background:var(--green-lt);color:var(--green);}
+  .status-badge.denied{background:var(--red-lt);color:var(--red);}
+
+  .users-table{width:100%;border-collapse:collapse;font-size:.83rem;}
+  .users-table th{text-align:left;padding:0 12px 10px 0;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text3);border-bottom:1px solid var(--border);}
+  .users-table td{padding:10px 12px 10px 0;border-bottom:1px solid var(--border);color:var(--text2);}
+  .users-table tr:last-child td{border-bottom:none;}
+  .pill{display:inline-block;border-radius:999px;padding:3px 10px;font-size:.7rem;font-weight:700;letter-spacing:.04em;}
+  .pill-green{background:var(--green-lt);color:var(--green);}
+  .pill-gray{background:var(--cream);color:var(--text3);}
+  .pill-blue{background:var(--csec-lt);color:var(--csec);}
+  .btn-sm-green{background:var(--green-lt);color:var(--green);border:1px solid #b2dfc7;border-radius:var(--r-sm);padding:4px 12px;font-size:.76rem;font-family:var(--font);font-weight:600;cursor:pointer;transition:.15s;}
+  .btn-sm-green:hover{background:var(--green);color:white;}
+  .btn-sm-red{background:var(--red-lt);color:var(--red);border:1px solid #f0c0bb;border-radius:var(--r-sm);padding:4px 12px;font-size:.76rem;font-family:var(--font);font-weight:600;cursor:pointer;transition:.15s;}
+  .btn-sm-red:hover{background:var(--red);color:white;}
+
+  .add-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .add-grid .span2{grid-column:1/-1;}
+  .lbl{font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text2);margin-bottom:6px;display:block;}
+  .input-f{width:100%;border:1.5px solid var(--border);border-radius:var(--r-sm);padding:10px 12px;font-size:.88rem;font-family:var(--font);color:var(--text);background:var(--white);outline:none;transition:border-color .2s,box-shadow .2s;}
+  .input-f:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(45,106,79,.1);}
+  select.input-f{cursor:pointer;}
+
+  .paper-extra{font-size:.76rem;color:var(--text2);margin-top:3px;font-style:italic;}
+  .btn-edit{display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:var(--csec-lt);color:var(--csec);border:1px solid #c0d4f0;border-radius:var(--r-sm);cursor:pointer;transition:all .15s;}
+  .btn-edit:hover{background:var(--csec);color:white;}
+
+  /* CAPE coming soon tooltip */
+  .cape-wrap{position:relative;display:inline-flex;align-items:center;}
+  .cape-soon{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:var(--text);color:white;font-size:.7rem;font-weight:600;padding:4px 10px;border-radius:6px;white-space:nowrap;pointer-events:none;z-index:10;}
+  .cape-soon::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--text);}
+  .cape-wrap:hover .cape-soon{display:block;}
+
+  /* Announcement bar */
+  .ann-bar{display:none;background:linear-gradient(90deg,var(--green-dk),var(--green));color:white;padding:10px 20px;align-items:center;gap:12px;flex-shrink:0;z-index:99;}
+  .ann-text{flex:1;font-size:.84rem;font-weight:500;text-align:center;}
+  .ann-close{background:rgba(255,255,255,.2);border:none;color:white;width:24px;height:24px;border-radius:50%;cursor:pointer;font-size:.85rem;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s;}
+  .ann-close:hover{background:rgba(255,255,255,.35);}
+
+  /* Terms of Service modal */
+  .tos-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:400;align-items:center;justify-content:center;padding:16px;}
+  .tos-overlay.open{display:flex;}
+  .tos-box{background:var(--white);border-radius:var(--r-lg);width:100%;max-width:640px;max-height:88vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg);overflow:hidden;}
+  .tos-head{padding:18px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0;}
+  .tos-head h3{font-family:var(--font-d);font-size:1.1rem;flex:1;}
+  .tos-body{padding:24px;overflow-y:auto;font-size:.86rem;line-height:1.85;color:var(--text2);}
+  .tos-body h4{font-family:var(--font-d);font-size:.95rem;color:var(--text);margin:20px 0 6px;}
+  .tos-body h4:first-child{margin-top:0;}
+  .tos-body p{margin-bottom:12px;}
+  .tos-link{color:#1a6fcc;text-decoration:underline;cursor:pointer;background:none;border:none;font-family:var(--font);font-size:inherit;padding:0;}
+  .tos-link:hover{color:#0f52a0;}
+
+  /* Section tabs in hero */
+  .hero-top{margin-bottom:20px;}
+  .papers-hero h2{font-family:var(--font-d);font-size:1.55rem;margin-bottom:3px;color:white;}
+  .papers-hero p{font-size:.84rem;opacity:.8;color:white;}
+  .section-tabs{display:flex;gap:8px;flex-wrap:wrap;}
+  .section-tab{display:inline-flex;align-items:center;gap:7px;border:1.5px solid rgba(255,255,255,.35);background:rgba(255,255,255,.1);border-radius:999px;padding:8px 20px;font-size:.84rem;font-family:var(--font);font-weight:500;color:rgba(255,255,255,.8);cursor:pointer;transition:all .18s;backdrop-filter:blur(4px);}
+  .section-tab:hover{background:rgba(255,255,255,.2);color:white;border-color:rgba(255,255,255,.55);}
+  .section-tab.active{background:white;color:var(--green-dk);border-color:white;font-weight:600;}
+  .soon-pill{background:rgba(255,255,255,.25);border-radius:999px;padding:1px 8px;font-size:.65rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;}
+  .section-tab.active .soon-pill{background:var(--green-lt);color:var(--green);}
+
+  /* Visibility toggle button */
+  .btn-visibility{display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:var(--green-lt);color:var(--green);border:1px solid #b2dfc7;border-radius:var(--r-sm);cursor:pointer;transition:all .15s;}
+  .btn-visibility:hover{background:var(--green);color:white;}
+  .btn-visibility.btn-hidden{background:#fff3e0;color:#e65100;border-color:#ffcc80;}
+  .btn-visibility.btn-hidden:hover{background:#e65100;color:white;}
+
+  /* Hidden paper card indicator for admin */
+  .paper-card.paper-hidden{border-style:dashed;border-color:#ffcc80;background:#fffbf5;opacity:.85;}
+  .view-mode-select{border:1.5px solid var(--border);background:var(--white);border-radius:var(--r-sm);padding:6px 10px;font-size:.78rem;font-family:var(--font);color:var(--text2);cursor:pointer;outline:none;transition:border-color .2s;}
+  .view-mode-select:focus{border-color:var(--green);}
+
+  /* Grid view */
+  .papers-list.view-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;}
+  .papers-list.view-grid-sm{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;}
+
+  .papers-list.view-grid .paper-card,
+  .papers-list.view-grid-sm .paper-card{
+    flex-direction:column;align-items:flex-start;gap:10px;padding:14px;
+  }
+  .papers-list.view-grid .paper-left,
+  .papers-list.view-grid-sm .paper-left{flex-direction:column;align-items:flex-start;gap:8px;width:100%;}
+  .papers-list.view-grid .paper-right,
+  .papers-list.view-grid-sm .paper-right{width:100%;justify-content:flex-start;}
+  .papers-list.view-grid .paper-title,
+  .papers-list.view-grid-sm .paper-title{white-space:normal;word-break:break-word;font-size:.85rem;}
+  .papers-list.view-grid .btn-view{width:100%;justify-content:center;}
+  .papers-list.view-grid-sm .btn-view{width:100%;justify-content:center;font-size:.72rem;padding:6px 10px;}
+  .papers-list.view-grid-sm .paper-title{font-size:.78rem;}
+  .papers-list.view-grid-sm .paper-card{padding:10px;}
+  .papers-list.view-grid-sm .type-badge{font-size:.58rem;padding:2px 7px;}
+  .papers-list.view-grid-sm .paper-extra{font-size:.7rem;}
+  .papers-list.view-grid-sm .btn-edit,.papers-list.view-grid-sm .btn-del{width:26px;height:26px;}
+
+  @media(max-width:640px){
+    .papers-list.view-grid{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));}
+    .papers-list.view-grid-sm{grid-template-columns:repeat(auto-fill,minmax(130px,1fr));}
+  }
+  .edit-modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:300;align-items:center;justify-content:center;padding:20px;}
+  .edit-modal-overlay.open{display:flex;}
+  .edit-modal-box{background:var(--white);border-radius:var(--r-lg);width:100%;max-width:500px;box-shadow:var(--shadow-lg);overflow:hidden;}
+  .edit-modal-head{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;}
+  .edit-modal-head h4{font-family:var(--font-d);font-size:1rem;flex:1;}
+  .edit-modal-body{padding:24px 22px;}
+  .edit-modal-title{font-size:.8rem;color:var(--text3);margin-bottom:16px;background:var(--off);border-radius:var(--r-sm);padding:10px 14px;border:1px solid var(--border);}
+
+  /* Admin announcement panel */
+  .ann-admin-box{background:var(--green-lt);border:1.5px solid #b2dfc7;border-radius:var(--r-sm);padding:18px;margin-bottom:20px;}
+  .ann-admin-box p{font-size:.82rem;color:var(--green-dk);line-height:1.7;}
+  .small{font-size:.8rem;}
+  .muted-msg{color:var(--text3);font-size:.86rem;padding:16px 0;}
+  .spinner{width:32px;height:32px;border:2.5px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite;margin:48px auto;}
+  .spinner.small{width:20px;height:20px;margin:20px auto;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--text);color:white;padding:11px 22px;border-radius:var(--r-sm);font-size:.85rem;font-weight:500;z-index:9999;transition:all .3s cubic-bezier(.34,1.56,.64,1);pointer-events:none;white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.2);}
+  .toast.show{transform:translateX(-50%) translateY(0);}
+  .toast.error{background:var(--red);}
+
+  @media(max-width:640px){
+    .login-card{padding:32px 22px;}
+    .topbar{padding:0 16px;}
+    .chip{display:none;}
+    .form-row{grid-template-columns:1fr;}
+    .add-grid{grid-template-columns:1fr;}
+    .add-grid .span2{grid-column:1;}
+    .papers-hero{padding:24px 16px 20px;}
+    .papers-body{padding:20px 14px;}
+    .req-card{flex-direction:column;}
+    .req-label{min-width:70px;}
+    .donation-card{flex-direction:column;gap:10px;}
+    .donate-bar{flex-direction:column;align-items:flex-start;}
+    .paper-card{flex-wrap:wrap;align-items:flex-start;}
+    .paper-left{flex:1 1 100%;}
+    .paper-right{flex:1 1 100%;justify-content:flex-start;margin-top:8px;}
+    .paper-title{white-space:normal;overflow:visible;text-overflow:unset;word-break:break-word;}
+    .paper-extra{white-space:normal;}
+    .atab{padding:10px 14px;font-size:.78rem;}
+  }
+</style>
+</head>
+<body>
+
+<!-- ══ LOGIN ══════════════════════════════════════════════ -->
+<div class="screen active" id="screen-login">
+  <div class="login-bg"></div>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo">
+        <svg viewBox="0 0 24 24"><path d="M9 12h6M9 16h6M4 4h16a1 1 0 011 1v14a1 1 0 01-1 1H4a1 1 0 01-1-1V5a1 1 0 011-1z"/><path d="M9 8h6"/></svg>
+      </div>
+      <h1>CXCPaperVault</h1>
+      <div class="login-slogan">The largest CXC catalog of papers</div>
+      <p>Sign in with your Google account to request access to hundreds of CSEC & CAPE past papers.</p>
+      <button class="btn-google" onclick="signInWithGoogle()">
+        <svg class="g-icon" viewBox="0 0 48 48">
+          <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.6 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34.1 6.6 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.2-.1-2.4-.4-3.5z"/>
+          <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 16 19 13 24 13c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34.1 6.6 29.3 4 24 4 16.3 4 9.7 8.4 6.3 14.7z"/>
+          <path fill="#4CAF50" d="M24 44c5.2 0 9.9-1.9 13.5-5.1l-6.2-5.3C29.4 35.3 26.8 36 24 36c-5.3 0-9.7-3.3-11.4-8l-6.6 5.1C9.5 39.4 16.3 44 24 44z"/>
+          <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.4 4.3-4.4 5.7l6.2 5.3C36.8 38.2 44 33 44 24c0-1.2-.1-2.4-.4-3.5z"/>
+        </svg>
+        Continue with Google
+      </button>
+      <p class="login-note">Free access · Request approval required · No payment needed</p>
+      <p class="login-note" style="margin-top:8px;"><button class="tos-link" onclick="openTos()">Read our Terms of Service here</button></p>
+    </div>
+  </div>
+</div>
+
+<!-- ══ WAITLIST ════════════════════════════════════════════ -->
+<div class="screen" id="screen-waitlist">
+  <nav class="topbar">
+    <div class="brand">CXC<span class="brand-accent">PaperVault</span></div>
+    <div class="topbar-right">
+      <button class="btn-top danger" onclick="signOutUser()">Sign Out</button>
+    </div>
+  </nav>
+  <div class="wl-body">
+    <div class="wl-hero">
+      <div class="wl-hero-icon">📋</div>
+      <h2>You're Almost In</h2>
+      <p>CXCPaperVault is currently invite-only. Submit your request below and we'll review and approve it soon — usually within 24 hours.</p>
+    </div>
+
+    <div class="wl-card">
+      <h3>Request Access</h3>
+      <p class="wl-sub">Fill in your details and submit. Once your request is reviewed and approved, you'll have full access to all CSEC & CAPE papers.</p>
+
+      <div id="wl-form">
+        <div class="form-row" style="margin-bottom:0;">
+          <div class="fgroup">
+            <label>Full Name</label>
+            <input type="text" id="wl-name" placeholder="Your full name">
+          </div>
+          <div class="fgroup">
+            <label>Email Address</label>
+            <input type="email" id="wl-email" placeholder="Your email address">
+          </div>
+        </div>
+        <div class="fgroup" style="margin-top:4px;">
+          <label>Anything you'd like to add? <span style="font-weight:400;text-transform:none;font-size:.75rem;color:var(--text3);">(optional)</span></label>
+          <textarea id="wl-note" rows="2" placeholder="e.g. subjects you need, year group, school…"></textarea>
+        </div>
+        <button class="btn-submit" id="wl-submit-btn" onclick="submitWaitlist()">Request Access</button>
+      </div>
+
+      <div class="wl-pending" id="wl-pending">
+        <div class="pending-icon">⏳</div>
+        <h3>Request Submitted!</h3>
+        <p>Your request is under review. Once approved, sign out and sign back in to access all papers.<br><br>
+        We typically review requests within 24 hours.</p>
+      </div>
+    </div>
+
+    <!-- Donation bar -->
+    <div class="donation-card">
+      <div class="don-icon">💛</div>
+      <div class="don-content">
+        <h4>Support CXCPaperVault</h4>
+        <p>Access is completely free — but if CXCPaperVault has helped you, consider sending a small donation via MMG. Donators may receive special perks in the future.</p>
+        <div class="don-mmg" onclick="copyMMG()">
+          <span>📱 MMG:</span>
+          <span class="don-number" id="mmg-number">648-3329</span>
+          <span style="font-size:.78rem;color:var(--text3);" id="mmg-copy-hint">tap to copy</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PAPERS ══════════════════════════════════════════════ -->
+<div class="screen" id="screen-papers">
+  <nav class="topbar">
+    <div class="brand">
+      CXC<span class="brand-accent">PaperVault</span>
+      <span class="brand-tag">The largest CXC catalog of papers</span>
+    </div>
+    <div class="topbar-right">
+      <button id="admin-btn" class="btn-top g" onclick="showScreen('admin')" style="display:none;">⚙ Admin</button>
+      <button class="btn-darkmode" id="darkmode-btn" onclick="toggleDarkMode()" title="Toggle dark mode">🌙</button>
+      <div class="chip">
+        <div class="avatar" id="user-avatar">U</div>
+        <span id="user-name"></span>
+      </div>
+      <button class="btn-top danger" onclick="signOutUser()">Sign Out</button>
+    </div>
+  </nav>
+
+  <!-- Announcement bar -->
+  <div class="ann-bar" id="ann-bar">
+    <span class="ann-text" id="ann-text"></span>
+    <button class="ann-close" onclick="dismissAnnouncement()" title="Dismiss">✕</button>
+  </div>
+
+  <div class="papers-hero">
+    <div class="papers-hero-inner">
+      <div class="hero-top">
+        <div>
+          <h2>CXC<span style="opacity:.85;">PaperVault</span></h2>
+          <p>The largest CXC catalog of papers</p>
+          <p style="margin-top:4px;font-size:.75rem;opacity:.65;"><button class="tos-link" style="color:rgba(255,255,255,.8);text-decoration:underline;background:none;border:none;font-family:var(--font);font-size:.75rem;cursor:pointer;padding:0;" onclick="openTos()">Terms of Service</button></p>
+        </div>
+      </div>
+      <div class="section-tabs">
+        <button class="section-tab active" data-section="papers" onclick="setSection('papers')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Past CXC Papers
+        </button>
+        <button class="section-tab" data-section="ai" onclick="setSection('ai')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+          AI Detection
+          <span class="soon-pill">Soon</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="papers-filters">
+    <div class="papers-filters-inner">
+      <div class="filter-row" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <div style="flex:1;">
+          <div class="filter-label">Exam Type</div>
+          <div id="filter-type"></div>
+        </div>
+        <div style="flex-shrink:0;display:flex;align-items:center;gap:8px;">
+          <span class="filter-label" style="margin-bottom:0;white-space:nowrap;">View</span>
+          <select id="view-mode-select" class="view-mode-select" onchange="setViewMode(this.value)">
+            <option value="rows">☰ Rows</option>
+            <option value="grid">⊞ Grid</option>
+            <option value="grid-sm">⊟ Small Grid</option>
+          </select>
+        </div>
+      </div>
+      <div id="filter-subject-row" style="display:none;">
+        <div class="filter-row">
+          <div class="filter-label">Subject</div>
+          <div id="filter-subject"></div>
+        </div>
+      </div>
+      <div id="filter-paper-row" style="display:none;">
+        <div class="filter-row">
+          <div class="filter-label">Paper</div>
+          <div id="filter-paper"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Search bar -->
+  <div class="papers-search-wrap" id="search-wrap">
+    <div class="papers-search-inner">
+      <svg class="papers-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input class="papers-search-input" id="search-input" type="text" placeholder="Search papers… e.g. Chemistry Paper 2, Mathematics 2023" oninput="onSearchInput(this.value)">
+      <button class="papers-search-clear" id="search-clear" onclick="clearSearch()">✕</button>
+    </div>
+    <div class="search-result-count" id="search-count"></div>
+  </div>
+
+  <div class="papers-body">
+    <!-- Recently viewed -->
+    <div class="recently-section" id="recently-section" style="display:none;">
+      <div class="recently-header">Continue Studying</div>
+      <div class="recently-list" id="recently-list"></div>
+    </div>
+
+    <!-- Saved / Bookmarked papers -->
+    <div class="saved-section" id="saved-section" style="display:none;">
+      <div class="saved-header">
+        <span class="saved-header-label">⭐ Saved Papers</span>
+        <button class="saved-clear-btn" onclick="clearAllBookmarks()">Clear all</button>
+      </div>
+      <div class="papers-list" id="saved-list"></div>
+    </div>
+
+    <div id="papers-content"><div class="spinner"></div></div>
+
+    <!-- Donation nudge in papers view -->
+    <div class="donate-bar">
+      <span style="font-size:1.4rem;">💛</span>
+      <div class="don-text">
+        <strong>Enjoying CXCPaperVault?</strong>
+        Support us with a voluntary donation via MMG — <strong onclick="copyMMG()" style="cursor:pointer;text-decoration:underline dotted;">648-3329</strong>. Donators may get special perks in the future.
+      </div>
+      <button class="btn-donate" onclick="copyMMG()">Copy MMG Number</button>
+    </div>
+
+    <div class="contact-bar" style="margin-top:10px;">
+      <p>Think a paper is missing or have feedback?</p>
+      <button class="btn-top" onclick="window.location.href='mailto:gt.triculture@gmail.com?subject=Paper%20Feedback'">Contact Support</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ VIEWER MODAL ════════════════════════════════════════ -->
+<div class="modal-overlay" id="viewer-modal" onclick="if(event.target===this)closeViewer()">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h4 id="viewer-title"></h4>
+      <div style="display:flex;align-items:center;gap:6px;margin-left:auto;">
+        <button class="btn-annotate" id="annotate-toggle-btn" onclick="toggleAnnotateMode()" title="Draw / Type on paper">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          Annotate
+        </button>
+        <button class="modal-close" onclick="closeViewer()">✕</button>
+      </div>
+    </div>
+    <div class="modal-note">🔒 View-only access — downloading and opening in new tabs is disabled.</div>
+
+    <!-- Annotation toolbar (hidden by default) -->
+    <div class="ann-toolbar" id="ann-toolbar" style="display:none;">
+      <div class="ann-tool-group">
+        <button class="ann-tool active" id="tool-draw" onclick="setAnnTool('draw')" title="Draw">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        </button>
+        <button class="ann-tool" id="tool-erase" onclick="setAnnTool('erase')" title="Eraser">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 20H7L3 16l10-10 7 7-3.5 3.5"/><path d="M6.1 15.9l3 3"/></svg>
+        </button>
+        <button class="ann-tool" id="tool-text" onclick="setAnnTool('text')" title="Add Text Box">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+        </button>
+      </div>
+      <div class="ann-tool-group ann-colors">
+        <button class="ann-color active" style="background:#1a4d8f;" data-color="#1a4d8f" onclick="setAnnColor('#1a4d8f',this)" title="Blue"></button>
+        <button class="ann-color" style="background:#2d6a4f;" data-color="#2d6a4f" onclick="setAnnColor('#2d6a4f',this)" title="Green"></button>
+        <button class="ann-color" style="background:#e07b2a;" data-color="#e07b2a" onclick="setAnnColor('#e07b2a',this)" title="Orange"></button>
+        <button class="ann-color" style="background:#e0bb00;" data-color="#e0bb00" onclick="setAnnColor('#e0bb00',this)" title="Yellow"></button>
+        <button class="ann-color" style="background:#c0392b;" data-color="#c0392b" onclick="setAnnColor('#c0392b',this)" title="Red"></button>
+        <button class="ann-color" style="background:#7d3c98;" data-color="#7d3c98" onclick="setAnnColor('#7d3c98',this)" title="Purple"></button>
+        <button class="ann-color" style="background:#1a1a1a;" data-color="#1a1a1a" onclick="setAnnColor('#1a1a1a',this)" title="Black"></button>
+      </div>
+      <div class="ann-tool-group">
+        <label class="ann-size-label">Size</label>
+        <input type="range" id="ann-size" min="1" max="20" value="3" class="ann-size-range" oninput="setAnnSize(this.value)">
+        <span id="ann-size-val" class="ann-size-num">3</span>
+      </div>
+      <div class="ann-tool-group" style="margin-left:auto;">
+        <button class="ann-action-btn" onclick="saveAnnotations()" title="Save annotations">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save
+        </button>
+        <button class="ann-action-btn danger" onclick="clearAnnotations()" title="Clear all annotations">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+          Clear
+        </button>
+      </div>
+    </div>
+
+    <!-- Viewer + canvas overlay wrapper -->
+    <div class="viewer-wrap" id="viewer-wrap">
+      <!-- inner-scroll is what actually scrolls; canvas+textboxes live inside it so they scroll with the content -->
+      <div class="viewer-inner" id="viewer-inner">
+        <iframe id="viewer-frame" src="" allowfullscreen sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+        <canvas id="ann-canvas"></canvas>
+        <div id="ann-textboxes"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ ADMIN ═══════════════════════════════════════════════ -->
+<div class="screen" id="screen-admin">
+  <nav class="topbar">
+    <div class="brand">CXC<span class="brand-accent">PaperVault</span> <span style="font-size:.68rem;color:var(--text3);font-family:var(--font);font-weight:400;margin-left:4px;">· Admin</span></div>
+    <div class="topbar-right">
+      <button class="btn-top" onclick="showScreen('papers')">← Papers</button>
+      <button class="btn-top danger" onclick="signOutUser()">Sign Out</button>
+    </div>
+  </nav>
+  <div class="admin-body">
+    <div class="admin-head">
+      <h2>Admin Dashboard</h2>
+    </div>
+    <div class="admin-tabs">
+      <button class="atab active" onclick="switchTab('tab-requests',this)">📋 Access Requests</button>
+      <button class="atab" onclick="switchTab('tab-users',this)">👥 All Users</button>
+      <button class="atab" onclick="switchTab('tab-add',this)">➕ Add Paper</button>
+      <button class="atab" onclick="switchTab('tab-announce',this)">📢 Announcement</button>
+    </div>
+
+    <!-- REQUESTS -->
+    <div class="atab-panel active" id="tab-requests">
+      <div class="panel-card">
+        <h3>Access Requests</h3>
+        <p class="panel-desc">Review waitlist requests and approve or deny access for each user.</p>
+        <div class="search-bar">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="text" id="req-search" placeholder="Search by name or email…" oninput="searchRequests()">
+        </div>
+        <div id="requests-list"><div class="spinner small"></div></div>
+      </div>
+    </div>
+
+    <!-- USERS -->
+    <div class="atab-panel" id="tab-users">
+      <div class="panel-card">
+        <h3>All Users</h3>
+        <p class="panel-desc">Search by name or email to find and manage users.</p>
+        <div class="search-bar">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="text" id="user-search" placeholder="Search by name, email…" oninput="searchUsers()">
+        </div>
+        <div id="users-list"><div class="spinner small"></div></div>
+      </div>
+    </div>
+
+    <!-- ADD PAPER -->
+    <div class="atab-panel" id="tab-add">
+      <div class="panel-card">
+        <h3>Add New Paper</h3>
+        <p class="panel-desc">Select the exam type first — the subject list will update automatically.</p>
+        <div class="add-grid">
+          <div>
+            <label class="lbl">Exam Type</label>
+            <select class="input-f" id="a-type" onchange="updateAddSubjectDropdown()">
+              <option value="CSEC">CSEC</option>
+              <option value="CAPE">CAPE</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl">Subject *</label>
+            <select class="input-f" id="a-subject">
+              <option value="">— Select Subject —</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl">Paper</label>
+            <select class="input-f" id="a-paper">
+              <option value="">— Select Paper —</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl">Session</label>
+            <select class="input-f" id="a-session">
+              <option value="">— Select Session —</option>
+              <option value="May/June">May/June</option>
+              <option value="January">January</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl">Year</label>
+            <input class="input-f" id="a-year" placeholder="e.g. 2023">
+          </div>
+          <div>
+            <!-- spacer -->
+          </div>
+          <div class="span2">
+            <label class="lbl">Google Drive File URL *</label>
+            <input class="input-f" id="a-url" placeholder="https://drive.google.com/file/d/…">
+          </div>
+          <div class="span2">
+            <label class="lbl">Extra Info (optional)</label>
+            <input class="input-f" id="a-extra" placeholder="Any additional notes…">
+          </div>
+          <div class="span2">
+            <button class="btn-submit" onclick="addPaper()">Add Paper</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- ANNOUNCEMENT -->
+    <div class="atab-panel" id="tab-announce">
+      <div class="panel-card">
+        <h3>Global Announcement</h3>
+        <p class="panel-desc">Set a message that appears as a banner for all users on the papers screen. Users can dismiss it. Set an expiry date/time and it will stop showing automatically.</p>
+        <div class="add-grid">
+          <div class="span2">
+            <label class="lbl">Message</label>
+            <input class="input-f" id="ann-admin-msg" placeholder="e.g. New CSEC Mathematics papers just added! 🎉">
+          </div>
+          <div>
+            <label class="lbl">Expires At <span style="font-weight:400;text-transform:none;">(optional)</span></label>
+            <input class="input-f" type="datetime-local" id="ann-admin-expiry">
+          </div>
+          <div style="display:flex;align-items:flex-end;padding-bottom:2px;gap:10px;">
+            <label style="display:flex;align-items:center;gap:8px;font-size:.85rem;cursor:pointer;color:var(--text2);">
+              <input type="checkbox" id="ann-admin-active" checked style="width:16px;height:16px;accent-color:var(--green);">
+              Show announcement (active)
+            </label>
+          </div>
+          <div class="span2">
+            <button class="btn-submit" id="ann-save-btn" onclick="saveAnnouncement()">Save Announcement</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ EDIT PAPER MODAL ═══════════════════════════════════ -->
+<div class="edit-modal-overlay" id="edit-modal" onclick="if(event.target===this)closeEditModal()">
+  <div class="edit-modal-box">
+    <div class="edit-modal-head">
+      <h4>Edit Paper</h4>
+      <button class="modal-close" onclick="closeEditModal()">✕</button>
+    </div>
+    <div class="edit-modal-body">
+      <input type="hidden" id="edit-id">
+      <div class="edit-modal-title" id="edit-title-display"></div>
+      <div class="fgroup">
+        <label>Google Drive File URL</label>
+        <input type="text" id="edit-url" placeholder="https://drive.google.com/file/d/…">
+      </div>
+      <div class="fgroup">
+        <label>Additional Notes <span style="font-weight:400;font-size:.75rem;color:var(--text3);">(shown below paper title)</span></label>
+        <input type="text" id="edit-extra" placeholder="e.g. Mark scheme included, Answers on page 3…">
+      </div>
+      <button class="btn-submit" id="edit-save-btn" onclick="savePaperEdit()">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ TERMS OF SERVICE MODAL ══════════════════════════════ -->
+<div class="tos-overlay" id="tos-modal" onclick="if(event.target===this)closeTos()">
+  <div class="tos-box">
+    <div class="tos-head">
+      <h3>Terms of Service</h3>
+      <button class="modal-close" onclick="closeTos()">✕</button>
+    </div>
+    <div class="tos-body">
+
+      <h4>About CXCPaperVault</h4>
+      <p>Cloud X Cabinet Paper Vault (CXCPaperVault) is a website built for students in certain Caribbean countries to access CSEC and CAPE past papers. By using our website, you agree to the terms outlined below. Any reference to other CXC brandings, content, or anything else mentioned is for information purposes only.</p>
+
+      <h4>Acceptance of Terms</h4>
+      <p>By accessing or using Cloud X Cabinet Paper Vault (CXCPaperVault), you agree to be bound by these Terms of Service. If you do not agree with any part of these terms, you must discontinue use of the Website immediately.</p>
+
+      <h4>Educational Purpose & Intellectual Property</h4>
+      <p>This Website and all materials made available through it are provided solely for personal educational and revision purposes for students in the Caribbean. Past examination papers, syllabi, and other official educational materials remain the property of their respective copyright holders, including the Caribbean Examinations Council where applicable. No copyright infringement is intended, and CXCPaperVault does not claim ownership of any official examination content. Any references to external materials or branding are for informational and educational purposes only.</p>
+
+      <h4>Privacy & Data Collection</h4>
+      <p>Our privacy practices are designed to be minimal and transparent. We collect email addresses solely for the purpose of granting and managing access to the platform. Where applicable, phone numbers may be used to verify voluntary donations made via MMG (Guyana Mobile Money). We do not sell, rent, or share personal information with third parties.</p>
+
+      <h4>Donations & Refunds</h4>
+      <p>All donations are voluntary and final. By completing a donation you acknowledge that no refunds will be issued under any circumstances. Users are also responsible for complying with the terms and policies of MMG during any transaction.</p>
+
+      <h4>Permitted Use & Prohibited Conduct</h4>
+      <p>This service is strictly for personal use. All materials are provided for lawful educational reference only and may not be resold, redistributed, or used for any commercial purpose. Any misuse of the Website — including unauthorized sharing of access credentials, redistribution of content, or attempts to exploit the service — may result in suspension or permanent termination of access at our sole discretion.</p>
+
+      <h4>Third-Party Services & Availability</h4>
+      <p>Educational resources may be stored or delivered through third-party cloud services, including but not limited to Google Drive. CXCPaperVault acts solely as an access portal and does not guarantee continuous availability of any files. Access may be modified, restricted, or removed at any time due to third-party policies, technical issues, or compliance requirements.</p>
+
+      <h4>Copyright & Takedown Requests</h4>
+      <p>If you are a copyright owner or authorized representative and believe that any content available through this Website infringes your rights, please contact us at <strong>gt.triculture@gmail.com</strong> with sufficient detail for review. Valid requests will be addressed promptly, and the relevant material will be removed where appropriate.</p>
+
+      <h4>Disclaimer of Warranties & Limitation of Liability</h4>
+      <p>CXCPaperVault is provided on an "as is" and "as available" basis without warranties of any kind. We make no guarantees regarding accuracy, completeness, or uninterrupted availability of content. We are not liable for academic outcomes, service interruptions, third-party hosting issues, or any damages arising from use of the Website. Use of this Website is at your own risk.</p>
+
+      <h4>Use of Annotation & Drawing Tools</h4>
+      <p>CXCPaperVault provides drawing and typing tools for personal study purposes only. Using these tools to create, display, or save any illegal, unethical, or inappropriate content — including content that violates any part of these Terms — will result in your account access being permanently revoked.</p>
+      <p>Your annotations are stored locally on your own device and remain private to your account. We cannot actively moderate locally stored content. However, any sharing, posting, or publishing of illegal or unethical content that involves or references CXCPaperVault — whether on or off the platform — will result in immediate and permanent revocation of your account access.</p>
+      <p>The only exception to content restrictions in annotations is for answers or drawings that directly relate to an examination question that legitimately requires such a response (for example, a biology diagram or a geography sketch). Any attempt to use this exception as a loophole to include inappropriate material unrelated to the question will result in your account access being revoked. Please keep all content safe for all ages.</p>
+
+      <h4>Changes to These Terms</h4>
+      <p>We reserve the right to update or modify these Terms of Service at any time without prior notice. Continued use of the Website constitutes acceptance of the most current version of the Terms.</p>
+
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  function switchTab(id, btn) {
+    document.querySelectorAll(".atab-panel").forEach(p => p.classList.remove("active"));
+    document.querySelectorAll(".atab").forEach(b => b.classList.remove("active"));
+    document.getElementById(id).classList.add("active");
+    btn.classList.add("active");
+  }
+
+  function openTos() {
+    document.getElementById("tos-modal").classList.add("open");
+    document.body.style.overflow = "hidden";
+  }
+  function closeTos() {
+    document.getElementById("tos-modal").classList.remove("open");
+    document.body.style.overflow = "";
+  }
+
+  function copyMMG() {
+    navigator.clipboard.writeText("6483329").then(() => {
+      window.showToast && window.showToast("MMG number copied! 648-3329", "success");
+    }).catch(() => {
+      window.showToast && window.showToast("MMG number: 648-3329", "success");
+    });
+  }
+
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") {
+      window.closeViewer && window.closeViewer();
+      window.closeEditModal && window.closeEditModal();
+      closeTos();
+    }
+  });
+</script>
+</body>
+</html>
