@@ -219,7 +219,55 @@
     if (!isAdmin) filtered = filtered.filter(p => p.hidden !== true);
 
     if (activeSection === "ai") {
-      cont.innerHTML = `<div class="empty-state"><div class="empty-icon">🤖</div><p class="empty-title">No content here yet...</p><p class="empty-sub">AI Detection is not supported as yet.. coming soon..</p></div>`;
+      cont.innerHTML = `
+        <div class="ai-detect-wrap">
+          <div class="ai-detect-hero">
+            <div class="ai-detect-icon">&#x1F50D;</div>
+            <h2 class="ai-detect-title">AI Detection</h2>
+            <p class="ai-detect-sub">Check your SBAs, papers and drafts for AI-generated content before your teacher or marker does.</p>
+          </div>
+          <div class="ai-detect-grid">
+            <div class="ai-detect-card featured">
+              <div class="ai-detect-card-top">
+                <div class="ai-detect-badge">Turnitin</div>
+                <span class="ai-detect-status available">Available Now</span>
+              </div>
+              <h3 class="ai-detect-card-title">TurnitinTestGY</h3>
+              <p class="ai-detect-card-desc">Run your work through a Turnitin-style AI &amp; plagiarism check. Specifically built for Caribbean students. See your AI percentage before submission.</p>
+              <div class="ai-detect-card-note">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                By using this service, you agree to CXCPaperVault ToS <em>and</em> TurnitinTestGY ToS.
+              </div>
+              <a href="https://gttriculture-cloud.github.io/TurnitinTestGY/" target="_blank" rel="noopener" class="ai-detect-btn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                Open TurnitinTestGY
+              </a>
+            </div>
+            <div class="ai-detect-card coming">
+              <div class="ai-detect-card-top">
+                <div class="ai-detect-badge native">Native</div>
+                <span class="ai-detect-status soon">Coming Soon</span>
+              </div>
+              <h3 class="ai-detect-card-title">Built-in AI Detector</h3>
+              <p class="ai-detect-card-desc">A native AI detection tool built directly into CXCPaperVault — no redirects, no accounts. Paste your text and get an instant AI percentage score.</p>
+              <button class="ai-detect-btn disabled" disabled>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                In Development
+              </button>
+            </div>
+          </div>
+          <div class="ai-detect-tos">
+            <h4 class="ai-detect-tos-title">&#x1F4CB; When Using TurnitinTestGY</h4>
+            <p>By visiting TurnitinTestGY through CXCPaperVault, you acknowledge and agree to the following:</p>
+            <ul class="ai-detect-tos-list">
+              <li>You must comply with <button class="tos-link-inline" onclick="openTos()">CXCPaperVault's Terms of Service</button> at all times.</li>
+              <li>You must also comply with <a href="https://gttriculture-cloud.github.io/TurnitinTestGY/" target="_blank" rel="noopener">TurnitinTestGY's own Terms of Service</a> as displayed on their site.</li>
+              <li>Do not submit content belonging to others without permission.</li>
+              <li>AI detection scores are indicative only — results may vary and are not definitive academic judgments.</li>
+              <li>CXCPaperVault is not affiliated with Turnitin&#x2122; or iParadigms. TurnitinTestGY is independently operated.</li>
+            </ul>
+          </div>
+        </div>`;
       return;
     }
 
@@ -1024,6 +1072,7 @@
   const _baseOpenViewer=window.openViewer;
   window.openViewer=(url,title,id)=>{
     annCurrentPaperId=id||null; annMode=false;
+    currentFileId=getDriveFileId(url)||null;
     _baseOpenViewer(url,title,id);
     setTimeout(()=>{
       document.getElementById("annotate-toggle-btn")?.classList.remove("active");
@@ -1483,6 +1532,38 @@
     .paper-extra{white-space:normal;}
     .atab{padding:10px 14px;font-size:.78rem;}
   }
+
+  /* ── AI DETECTION SECTION ── */
+  .ai-detect-wrap{max-width:780px;margin:0 auto;padding:32px 20px 48px;}
+  .ai-detect-hero{text-align:center;margin-bottom:32px;}
+  .ai-detect-icon{font-size:2.8rem;margin-bottom:12px;line-height:1;}
+  .ai-detect-title{font-family:var(--font-d);font-size:1.7rem;font-weight:700;color:var(--text);margin-bottom:8px;}
+  .ai-detect-sub{font-size:.95rem;color:var(--text2);max-width:480px;margin:0 auto;line-height:1.7;}
+  .ai-detect-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:28px;}
+  @media(max-width:640px){.ai-detect-grid{grid-template-columns:1fr;}}
+  .ai-detect-card{background:var(--white);border:1.5px solid var(--border);border-radius:var(--r-lg);padding:24px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow);}
+  .ai-detect-card.featured{border-color:var(--green);box-shadow:0 0 0 3px rgba(45,106,79,.08),var(--shadow-md);}
+  .ai-detect-card.coming{opacity:.8;}
+  .ai-detect-card-top{display:flex;align-items:center;gap:8px;justify-content:space-between;}
+  .ai-detect-badge{font-size:.7rem;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--csec-lt);color:var(--csec);letter-spacing:.04em;text-transform:uppercase;}
+  .ai-detect-badge.native{background:var(--gold-lt);color:var(--gold);}
+  .ai-detect-status{font-size:.72rem;font-weight:600;padding:3px 10px;border-radius:999px;}
+  .ai-detect-status.available{background:var(--green-lt);color:var(--green-dk);}
+  .ai-detect-status.soon{background:var(--cream);color:var(--text3);}
+  .ai-detect-card-title{font-family:var(--font-d);font-size:1.05rem;font-weight:700;color:var(--text);}
+  .ai-detect-card-desc{font-size:.85rem;color:var(--text2);line-height:1.65;flex:1;}
+  .ai-detect-card-note{font-size:.75rem;color:var(--text3);background:var(--off);border-radius:var(--r-sm);padding:9px 12px;display:flex;gap:6px;align-items:flex-start;line-height:1.55;}
+  .ai-detect-card-note svg{flex-shrink:0;margin-top:1px;color:var(--green);}
+  .ai-detect-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;background:var(--green);color:white;border:none;border-radius:var(--r-sm);padding:11px 18px;font-size:.85rem;font-weight:600;font-family:var(--font);cursor:pointer;text-decoration:none;transition:background .15s,transform .1s;margin-top:4px;}
+  .ai-detect-btn:hover{background:var(--green-hv);transform:translateY(-1px);}
+  .ai-detect-btn.disabled{background:var(--border2);color:var(--text3);cursor:not-allowed;transform:none;}
+  .ai-detect-tos{background:var(--white);border:1.5px solid var(--border);border-radius:var(--r-lg);padding:24px 28px;}
+  .ai-detect-tos-title{font-family:var(--font-d);font-size:1rem;font-weight:700;margin-bottom:10px;color:var(--text);}
+  .ai-detect-tos p{font-size:.85rem;color:var(--text2);margin-bottom:12px;line-height:1.6;}
+  .ai-detect-tos-list{padding-left:18px;display:flex;flex-direction:column;gap:7px;}
+  .ai-detect-tos-list li{font-size:.83rem;color:var(--text2);line-height:1.6;}
+  .ai-detect-tos-list a{color:var(--green);text-decoration:underline;}
+  .tos-link-inline{background:none;border:none;color:var(--green);text-decoration:underline;cursor:pointer;font-family:var(--font);font-size:inherit;padding:0;}
 </style>
 </head>
 <body>
