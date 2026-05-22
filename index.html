@@ -738,29 +738,26 @@
     if (btn) btn.textContent = isDark ? "☀️" : "🌙";
   };
 
-  // ── ANNOTATIONS ─────────────────────────────────────────────
-  // ── ANNOTATIONS ─────────────────────────────────────────────
+  // ── ANNOTATIONS (side-by-side pane) ─────────────────────────
   let annMode=false, annTool="draw", annColor="#1a4d8f", annSize=3;
   let annDrawing=false, annCurrentStroke=null;
   let annStrokes=[], annTextboxes=[], annCurrentPaperId=null;
+  const ANN_H=3000; // fixed tall canvas height
 
   function annKey(){ return `cxc_ann_${currentUser?.uid||"x"}_${annCurrentPaperId}`; }
 
   function loadAnnotations(){
-    try{
-      const d=JSON.parse(localStorage.getItem(annKey())||"{}");
-      annStrokes=d.strokes||[]; annTextboxes=d.textboxes||[];
-    } catch{ annStrokes=[]; annTextboxes=[]; }
+    try{ const d=JSON.parse(localStorage.getItem(annKey())||"{}"); annStrokes=d.strokes||[]; annTextboxes=d.textboxes||[]; }
+    catch{ annStrokes=[]; annTextboxes=[]; }
   }
 
   window.saveAnnotations=()=>{
     annTextboxes.forEach(tb=>{
       const el=document.getElementById("tb-"+tb.id); if(!el) return;
       tb.text=el.querySelector("textarea")?.value||tb.text;
-      const inner=document.getElementById("viewer-inner");
-      const iw=inner.offsetWidth||1, ih=inner.offsetHeight||1;
-      tb.xp=(parseFloat(el.style.left)/iw*100).toFixed(4);
-      tb.yp=(parseFloat(el.style.top) /ih*100).toFixed(4);
+      const cv=document.getElementById("ann-canvas"); const cw=cv?cv.width:300;
+      tb.xp=(parseFloat(el.style.left)/cw*100).toFixed(4);
+      tb.yp=(parseFloat(el.style.top)/ANN_H*100).toFixed(4);
     });
     localStorage.setItem(annKey(), JSON.stringify({strokes:annStrokes,textboxes:annTextboxes}));
     showToast("✓ Annotations saved!");
@@ -770,32 +767,26 @@
     if(!confirm("Clear all annotations for this paper?")) return;
     annStrokes=[]; annTextboxes=[];
     localStorage.removeItem(annKey());
-    redrawCanvas();
+    const cv=document.getElementById("ann-canvas");
+    if(cv){ const ctx=cv.getContext("2d"); ctx.clearRect(0,0,cv.width,cv.height); }
     const c=document.getElementById("ann-textboxes"); if(c) c.innerHTML="";
     showToast("Annotations cleared.");
   };
 
-  function getInnerSize(){
-    const el=document.getElementById("viewer-inner");
-    return el ? {w:el.offsetWidth||800, h:el.offsetHeight||1400} : {w:800,h:1400};
-  }
-
   function sizeCanvas(){
     const cv=document.getElementById("ann-canvas");
-    const inner=document.getElementById("viewer-inner");
-    if(!cv||!inner) return;
-    const w=inner.offsetWidth, h=inner.offsetHeight;
-    if(!w||!h) return;
-    cv.width=w; cv.height=h;
-    // CSS size matches — canvas is 100% via CSS already
-    redrawCanvas();
+    const scroll=document.getElementById("ann-scroll");
+    if(!cv||!scroll) return;
+    const w=scroll.clientWidth||300;
+    cv.width=w; cv.height=ANN_H;
+    const tbc=document.getElementById("ann-textboxes");
+    if(tbc) tbc.style.height=ANN_H+"px";
+    redrawCanvas(); renderTextboxes();
   }
 
   function redrawCanvas(){
     const cv=document.getElementById("ann-canvas"); if(!cv||!cv.width) return;
-    const ctx=cv.getContext("2d");
-    ctx.clearRect(0,0,cv.width,cv.height);
-    const {w,h}=getInnerSize();
+    const ctx=cv.getContext("2d"); ctx.clearRect(0,0,cv.width,cv.height);
     annStrokes.forEach(s=>{
       if(!s.pts||s.pts.length<2) return;
       ctx.save();
@@ -803,8 +794,8 @@
       ctx.strokeStyle=s.tool==="erase"?"rgba(0,0,0,1)":s.color;
       ctx.lineWidth=s.size; ctx.lineCap="round"; ctx.lineJoin="round";
       ctx.beginPath();
-      ctx.moveTo(s.pts[0][0]/100*w, s.pts[0][1]/100*h);
-      for(let i=1;i<s.pts.length;i++) ctx.lineTo(s.pts[i][0]/100*w, s.pts[i][1]/100*h);
+      ctx.moveTo(s.pts[0][0]/100*cv.width, s.pts[0][1]/100*ANN_H);
+      for(let i=1;i<s.pts.length;i++) ctx.lineTo(s.pts[i][0]/100*cv.width, s.pts[i][1]/100*ANN_H);
       ctx.stroke(); ctx.restore();
     });
   }
@@ -814,10 +805,10 @@
   function renderTextboxes(){
     const c=document.getElementById("ann-textboxes"); if(!c) return;
     c.innerHTML="";
-    const {w,h}=getInnerSize();
+    const cv=document.getElementById("ann-canvas"); const cw=cv?cv.width:300;
     annTextboxes.forEach(tb=>{
-      const xpx=(parseFloat(tb.xp)||0)/100*w;
-      const ypx=(parseFloat(tb.yp)||0)/100*h;
+      const xpx=parseFloat(tb.xp||0)/100*cw;
+      const ypx=parseFloat(tb.yp||0)/100*ANN_H;
       const node=document.createElement("div");
       node.className="ann-textnode"; node.id="tb-"+tb.id;
       node.style.cssText=`left:${xpx}px;top:${ypx}px;position:absolute;width:${tb.w||"180px"};pointer-events:${annMode?"all":"none"};`;
@@ -827,14 +818,12 @@
           <button class="ann-textnode-btn" onclick="deleteTextbox('${tb.id}')">✕</button>
         </div>
         <textarea style="color:${tb.color||annColor};border:${annMode?"1.5px dashed rgba(0,0,0,0.35)":"none"};" placeholder="${annMode?"Type here…":""}">${escHtml(tb.text)}</textarea>`;
-      // Drag handle
       const bar=node.querySelector(".ann-textnode-move");
       let ox=0,oy=0,sx=0,sy=0;
       bar.addEventListener("mousedown",e=>{
         e.preventDefault(); sx=e.clientX; sy=e.clientY;
-        const ir=document.getElementById("viewer-inner").getBoundingClientRect();
-        const nr=node.getBoundingClientRect();
-        ox=nr.left-ir.left; oy=nr.top-ir.top;
+        const cr=c.getBoundingClientRect(); const nr=node.getBoundingClientRect();
+        ox=nr.left-cr.left; oy=nr.top-cr.top;
         const mm=e2=>{ node.style.left=(ox+e2.clientX-sx)+"px"; node.style.top=(oy+e2.clientY-sy)+"px"; };
         const mu=()=>{ document.removeEventListener("mousemove",mm); document.removeEventListener("mouseup",mu); };
         document.addEventListener("mousemove",mm); document.addEventListener("mouseup",mu);
@@ -845,111 +834,187 @@
 
   window.deleteTextbox=(id)=>{ annTextboxes=annTextboxes.filter(t=>t.id!==id); renderTextboxes(); };
 
-  function setPointers(){
-    const cv=document.getElementById("ann-canvas");
-    const tbc=document.getElementById("ann-textboxes");
-    const frame=document.getElementById("viewer-frame");
-    if(!cv||!tbc||!frame) return;
-    if(!annMode){
-      cv.style.pointerEvents="none"; cv.style.cursor="default";
-      tbc.style.pointerEvents="none";
-      frame.style.pointerEvents="all"; // iframe scrolls normally
-    } else if(annTool==="text"){
-      cv.style.pointerEvents="none"; cv.style.cursor="text";
-      tbc.style.pointerEvents="all";
-      frame.style.pointerEvents="none"; // block iframe so outer div scrolls
-    } else {
-      cv.style.pointerEvents="all"; cv.style.cursor=annTool==="erase"?"cell":"crosshair";
-      tbc.style.pointerEvents="none";
-      frame.style.pointerEvents="none"; // block iframe so outer div scrolls
-    }
-  }
-
   window.toggleAnnotateMode=()=>{
     annMode=!annMode;
     document.getElementById("annotate-toggle-btn")?.classList.toggle("active",annMode);
     const toolbar=document.getElementById("ann-toolbar");
+    const pane=document.getElementById("viewer-ann-pane");
     if(toolbar) toolbar.style.display=annMode?"flex":"none";
-    if(annMode) sizeCanvas();
-    setPointers();
-    renderTextboxes();
+    if(pane) pane.style.display=annMode?"flex":"none";
+    if(annMode){ sizeCanvas(); }
+    else{ renderTextboxes(); }
   };
 
   window.setAnnTool=(t)=>{
     annTool=t;
     document.querySelectorAll(".ann-tool").forEach(b=>b.classList.remove("active"));
     document.getElementById("tool-"+t)?.classList.add("active");
-    setPointers();
+    const cv=document.getElementById("ann-canvas");
+    const tbc=document.getElementById("ann-textboxes");
+    const grabber=document.getElementById("page-grabber");
+    if(grabber) grabber.style.display=t==="magnet"?"block":"none";
+    if(t==="text"){
+      if(cv){ cv.style.pointerEvents="none"; cv.style.cursor="default"; }
+      if(tbc) tbc.style.pointerEvents="all";
+    } else if(t==="magnet"){
+      if(cv){ cv.style.pointerEvents="none"; cv.style.cursor="default"; }
+      if(tbc) tbc.style.pointerEvents="none";
+    } else {
+      if(cv){ cv.style.pointerEvents="all"; cv.style.cursor=t==="erase"?"cell":"crosshair"; }
+      if(tbc) tbc.style.pointerEvents="none";
+    }
   };
+
+  // ── PAGE GRABBER ─────────────────────────────────────────────
+  // Each grabbed page is stored as a data object: {pageNum, dataUrl, yOffset (% of ANN_H), width}
+  // They are drawn as background images on the canvas before strokes.
+  let grabbedPages = []; // [{pageNum, dataUrl, yPct}]
+  let currentFileId = null; // extracted from the paper's Drive URL
+
+  function setGrabStatus(msg, type="loading"){
+    const el=document.getElementById("grab-status");
+    if(!el) return;
+    el.style.display=msg?"block":"none";
+    el.textContent=msg;
+    el.className="grab-status "+type;
+  }
+
+  // Extract Drive file ID from URL
+  function getDriveFileId(url){
+    if(!url) return null;
+    const m=url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+    return m?m[1]:null;
+  }
+
+  window.grabPage=async()=>{
+    const pageNum=parseInt(document.getElementById("grab-page-num")?.value)||1;
+    if(!currentFileId){ setGrabStatus("No file loaded. Open a paper first.","err"); return; }
+    const btn=document.querySelector(".grab-btn");
+    if(btn){ btn.disabled=true; btn.textContent="Grabbing…"; }
+    setGrabStatus(`Fetching page ${pageNum}…`,"loading");
+
+    // Google Drive export as PNG for a specific page:
+    // https://drive.google.com/thumbnail?id=FILE_ID&sz=w1200&pageid=PAGE (0-indexed)
+    const pageIdx=pageNum-1;
+    const imgUrl=`https://drive.google.com/thumbnail?id=${currentFileId}&sz=w1200&pageid=${pageIdx}`;
+
+    try{
+      // Fetch via Image element (CORS may block — use a proxy fallback)
+      const img=new Image();
+      img.crossOrigin="anonymous";
+      await new Promise((res,rej)=>{
+        img.onload=res;
+        img.onerror=rej;
+        img.src=imgUrl+"&t="+Date.now(); // cache bust
+        setTimeout(()=>rej(new Error("timeout")),12000);
+      });
+
+      // Convert to dataUrl
+      const tmp=document.createElement("canvas");
+      tmp.width=img.naturalWidth||img.width;
+      tmp.height=img.naturalHeight||img.height;
+      tmp.getContext("2d").drawImage(img,0,0);
+      const dataUrl=tmp.toDataURL("image/jpeg",0.9);
+
+      // Calculate yOffset: stack pages vertically
+      // Each page takes up (canvasWidth / aspect ratio) pixels
+      const cv=document.getElementById("ann-canvas");
+      const cw=cv?cv.width:340;
+      const aspect=tmp.height/tmp.width;
+      const pageHeightPx=Math.round(cw*aspect);
+
+      // Find next free y position (below all existing grabbed pages)
+      let nextY=0;
+      grabbedPages.forEach(p=>{
+        const ph=Math.round(cw*(p.aspect||1.414));
+        const pageYPx=p.yPct/100*ANN_H;
+        nextY=Math.max(nextY, pageYPx+ph+20);
+      });
+
+      // Remove existing entry for same page number if re-grabbed
+      grabbedPages=grabbedPages.filter(p=>p.pageNum!==pageNum);
+      grabbedPages.push({pageNum, dataUrl, yPct:(nextY/ANN_H*100), aspect});
+      grabbedPages.sort((a,b)=>a.pageNum-b.pageNum);
+
+      // Save grabbed pages into annotations
+      const saved=JSON.parse(localStorage.getItem(annKey())||"{}");
+      saved.grabbedPages=grabbedPages;
+      localStorage.setItem(annKey(),JSON.stringify(saved));
+
+      redrawCanvas();
+      setGrabStatus(`✓ Page ${pageNum} grabbed! Scroll down to see it.`,"ok");
+      updatePageCount();
+
+    } catch(err){
+      setGrabStatus(`Could not load page ${pageNum}. The PDF may not support page thumbnails, or try a different page number.`,"err");
+    } finally {
+      if(btn){ btn.disabled=false; btn.textContent="Grab"; btn.innerHTML=`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 15A6 6 0 0 0 6 3H3v4h3M18 15A6 6 0 0 1 18 3h3v4h-3M9 3v4M15 3v4M6 19h12"/></svg> Grab`; }
+    }
+  };
+
+  function updatePageCount(){
+    const el=document.getElementById("ann-pages-count");
+    const ind=document.getElementById("ann-pages-indicator");
+    if(!el||!ind) return;
+    if(grabbedPages.length>0){
+      ind.style.display="block";
+      el.textContent=`${grabbedPages.length} page${grabbedPages.length!==1?"s":""} grabbed`;
+    } else {
+      ind.style.display="none";
+    }
+  }
   window.setAnnColor=(c,el)=>{ annColor=c; document.querySelectorAll(".ann-color").forEach(b=>b.classList.remove("active")); el?.classList.add("active"); };
   window.setAnnSize=(v)=>{ annSize=parseInt(v); const el=document.getElementById("ann-size-val"); if(el) el.textContent=v; };
 
   function getPct(e){
-    const cv=document.getElementById("ann-canvas");
-    const r=cv.getBoundingClientRect();
+    const cv=document.getElementById("ann-canvas"); const r=cv.getBoundingClientRect();
     const cx=e.touches?e.touches[0].clientX:e.clientX;
     const cy=e.touches?e.touches[0].clientY:e.clientY;
-    return[ ((cx-r.left)/r.width*100), ((cy-r.top)/r.height*100) ];
+    return[ ((cx-r.left)/cv.width*100), ((cy-r.top)/ANN_H*100) ];
   }
 
   function startDraw(e){
-    if(!annMode||annTool==="text") return;
-    e.preventDefault();
-    annDrawing=true;
+    if(annTool==="text") return;
+    e.preventDefault(); annDrawing=true;
     annCurrentStroke={tool:annTool,color:annColor,size:annSize,pts:[getPct(e)]};
   }
   function moveDraw(e){
     if(!annDrawing||!annCurrentStroke) return;
     e.preventDefault();
-    const p=getPct(e);
-    annCurrentStroke.pts.push(p);
-    const cv=document.getElementById("ann-canvas");
-    const ctx=cv.getContext("2d");
+    const p=getPct(e); annCurrentStroke.pts.push(p);
+    const cv=document.getElementById("ann-canvas"); const ctx=cv.getContext("2d");
     const pts=annCurrentStroke.pts;
-    const {w,h}=getInnerSize();
     ctx.save();
     ctx.globalCompositeOperation=annCurrentStroke.tool==="erase"?"destination-out":"source-over";
     ctx.strokeStyle=annCurrentStroke.tool==="erase"?"rgba(0,0,0,1)":annCurrentStroke.color;
     ctx.lineWidth=annCurrentStroke.size; ctx.lineCap="round"; ctx.lineJoin="round";
     ctx.beginPath();
-    ctx.moveTo(pts[pts.length-2][0]/100*w, pts[pts.length-2][1]/100*h);
-    ctx.lineTo(pts[pts.length-1][0]/100*w, pts[pts.length-1][1]/100*h);
+    ctx.moveTo(pts[pts.length-2][0]/100*cv.width, pts[pts.length-2][1]/100*ANN_H);
+    ctx.lineTo(pts[pts.length-1][0]/100*cv.width, pts[pts.length-1][1]/100*ANN_H);
     ctx.stroke(); ctx.restore();
   }
-  function endDraw(){
-    if(!annDrawing) return; annDrawing=false;
-    if(annCurrentStroke&&annCurrentStroke.pts.length>1) annStrokes.push(annCurrentStroke);
-    annCurrentStroke=null;
-  }
+  function endDraw(){ if(!annDrawing) return; annDrawing=false; if(annCurrentStroke&&annCurrentStroke.pts.length>1) annStrokes.push(annCurrentStroke); annCurrentStroke=null; }
 
   function initAnnotationEvents(){
     const cv=document.getElementById("ann-canvas");
-    const tbc=document.getElementById("ann-textboxes");
     if(cv&&!cv._annInit){
       cv._annInit=true;
-      cv.addEventListener("mousedown",startDraw);
-      cv.addEventListener("mousemove",moveDraw);
-      cv.addEventListener("mouseup",endDraw);
-      cv.addEventListener("mouseleave",endDraw);
+      cv.addEventListener("mousedown",startDraw); cv.addEventListener("mousemove",moveDraw);
+      cv.addEventListener("mouseup",endDraw); cv.addEventListener("mouseleave",endDraw);
       cv.addEventListener("touchstart",startDraw,{passive:false});
       cv.addEventListener("touchmove",moveDraw,{passive:false});
       cv.addEventListener("touchend",endDraw);
     }
+    const tbc=document.getElementById("ann-textboxes");
     if(tbc&&!tbc._annInit){
       tbc._annInit=true;
       tbc.addEventListener("click",e=>{
         if(!annMode||annTool!=="text"||e.target.closest(".ann-textnode")) return;
-        const inner=document.getElementById("viewer-inner");
-        const ir=inner.getBoundingClientRect();
-        const iw=inner.offsetWidth||1, ih=inner.offsetHeight||1;
-        const xpx=e.clientX-ir.left, ypx=e.clientY-ir.top;
+        const cv=document.getElementById("ann-canvas"); const cw=cv?cv.width:300;
+        const cr=tbc.getBoundingClientRect();
+        const xpx=e.clientX-cr.left, ypx=e.clientY-cr.top;
         const id="tb"+Date.now();
-        annTextboxes.push({
-          id,
-          xp:(xpx/iw*100).toFixed(4),
-          yp:(ypx/ih*100).toFixed(4),
-          w:"180px", color:annColor, text:""
-        });
+        annTextboxes.push({id, xp:(xpx/cw*100).toFixed(4), yp:(ypx/ANN_H*100).toFixed(4), w:"180px", color:annColor, text:""});
         renderTextboxes();
         setTimeout(()=>document.getElementById("tb-"+id)?.querySelector("textarea")?.focus(),30);
       });
@@ -963,25 +1028,15 @@
     setTimeout(()=>{
       document.getElementById("annotate-toggle-btn")?.classList.remove("active");
       const toolbar=document.getElementById("ann-toolbar"); if(toolbar) toolbar.style.display="none";
-      const cv=document.getElementById("ann-canvas");
-      const tbc=document.getElementById("ann-textboxes");
-      const frame=document.getElementById("viewer-frame");
-      if(cv){ cv._annInit=false; cv.width=0; cv.height=0; }
-      if(tbc){ tbc._annInit=false; tbc.innerHTML=""; }
-      if(frame) frame.style.pointerEvents="all";
+      const pane=document.getElementById("viewer-ann-pane"); if(pane) pane.style.display="none";
+      const cv=document.getElementById("ann-canvas"); if(cv){ cv._annInit=false; cv.width=0; cv.height=0; }
+      const tbc=document.getElementById("ann-textboxes"); if(tbc){ tbc._annInit=false; tbc.innerHTML=""; }
       loadAnnotations();
       initAnnotationEvents();
-      sizeCanvas();
-      setPointers();
-      renderTextboxes(); // show saved textboxes immediately (transparent, no handles)
-    },300);
+    },150);
   };
 
-  window.addEventListener("resize",()=>{
-    if(document.getElementById("viewer-modal")?.classList.contains("open")){
-      sizeCanvas(); renderTextboxes();
-    }
-  });
+  window.addEventListener("resize",()=>{ if(annMode) sizeCanvas(); });
 </script>
 
 <style>
@@ -1216,12 +1271,36 @@
   .ann-action-btn:hover{background:var(--green-lt);color:var(--green);border-color:#b2dfc7;}
   .ann-action-btn.danger:hover{background:var(--red-lt);color:var(--red);border-color:#f0c0bb;}
 
-  /* Viewer + canvas wrapper */
-  .viewer-wrap{flex:1;overflow-y:auto;overflow-x:hidden;position:relative;min-height:0;-webkit-overflow-scrolling:touch;}
-  .viewer-inner{position:relative;width:100%;height:1400px;} /* tall enough for a full PDF page */
-  #viewer-frame{position:absolute;inset:0;width:100%;height:100%;border:none;z-index:1;}
-  #ann-canvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:2;display:block;}
-  #ann-textboxes{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:3;overflow:visible;}
+  /* Viewer side-by-side layout */
+  .viewer-wrap{flex:1;display:flex;min-height:0;overflow:hidden;}
+  .viewer-pdf-pane{flex:1;min-width:0;display:flex;flex-direction:column;}
+  .viewer-pdf-pane iframe{flex:1;border:none;width:100%;height:100%;display:block;}
+  .viewer-ann-pane{width:340px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid var(--border);background:var(--off);}
+  .ann-pane-header{padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--white);}
+  .ann-pane-label{font-size:.82rem;font-weight:600;color:var(--text);display:block;}
+  .ann-pane-hint{font-size:.72rem;color:var(--text3);display:block;margin-top:2px;line-height:1.5;}
+
+  /* Page grabber */
+  .page-grabber{margin-top:10px;background:var(--green-lt);border:1px solid #b2dfc7;border-radius:var(--r-sm);padding:10px 12px;}
+  .page-grabber-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;}
+  .page-grabber-label{font-size:.76rem;font-weight:600;color:var(--green-dk);white-space:nowrap;}
+  .grab-input{width:70px;border:1.5px solid var(--border);border-radius:var(--r-sm);padding:5px 8px;font-size:.84rem;font-family:var(--font);outline:none;text-align:center;color:var(--text);}
+  .grab-input:focus{border-color:var(--green);}
+  .grab-btn{display:inline-flex;align-items:center;gap:5px;background:var(--green);color:white;border:none;border-radius:var(--r-sm);padding:6px 12px;font-size:.78rem;font-family:var(--font);font-weight:600;cursor:pointer;transition:.15s;white-space:nowrap;}
+  .grab-btn:hover{background:var(--green-hv);}
+  .grab-btn:disabled{opacity:.6;cursor:not-allowed;}
+  .page-grabber-note{font-size:.7rem;color:var(--green-dk);opacity:.7;line-height:1.5;}
+  .grab-status{margin-top:6px;font-size:.74rem;padding:5px 8px;border-radius:4px;font-weight:500;}
+  .grab-status.ok{background:#e8f5ef;color:var(--green-dk);}
+  .grab-status.err{background:var(--red-lt);color:var(--red);}
+  .grab-status.loading{background:var(--gold-lt);color:#6b5000;}
+  .ann-scroll{flex:1;overflow-y:auto;overflow-x:hidden;position:relative;background:white;cursor:crosshair;}
+  #ann-canvas{display:block;width:100%;}
+  #ann-textboxes{position:absolute;top:0;left:0;width:100%;pointer-events:none;}
+  @media(max-width:768px){
+    .viewer-wrap{flex-direction:column;}
+    .viewer-ann-pane{width:100%;max-height:280px;border-left:none;border-top:1px solid var(--border);}
+  }
 
   /* Text box nodes */
   .ann-textnode{position:absolute;min-width:100px;}
@@ -1645,6 +1724,10 @@
         <button class="ann-tool" id="tool-text" onclick="setAnnTool('text')" title="Add Text Box">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
         </button>
+        <div style="width:1px;height:20px;background:var(--border);margin:0 2px;"></div>
+        <button class="ann-tool" id="tool-magnet" onclick="setAnnTool('magnet')" title="Grab page from PDF to annotate on">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 15A6 6 0 0 0 6 3H3v4h3M18 15A6 6 0 0 1 18 3h3v4h-3M9 3v4M15 3v4M6 19h12"/></svg>
+        </button>
       </div>
       <div class="ann-tool-group ann-colors">
         <button class="ann-color active" style="background:#1a4d8f;" data-color="#1a4d8f" onclick="setAnnColor('#1a4d8f',this)" title="Blue"></button>
@@ -1672,13 +1755,44 @@
       </div>
     </div>
 
-    <!-- Viewer + canvas overlay wrapper -->
+    <!-- Viewer + annotation side by side -->
     <div class="viewer-wrap" id="viewer-wrap">
-      <!-- inner-scroll is what actually scrolls; canvas+textboxes live inside it so they scroll with the content -->
-      <div class="viewer-inner" id="viewer-inner">
+      <!-- LEFT: PDF iframe — scrolls on its own, we never touch it -->
+      <div class="viewer-pdf-pane">
         <iframe id="viewer-frame" src="" allowfullscreen sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
-        <canvas id="ann-canvas"></canvas>
-        <div id="ann-textboxes"></div>
+      </div>
+      <!-- RIGHT: annotation canvas pane — shown when annotate mode is on -->
+      <div class="viewer-ann-pane" id="viewer-ann-pane" style="display:none;">
+        <div class="ann-pane-header">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+            <div>
+              <span class="ann-pane-label">📝 Your Notes</span>
+              <span class="ann-pane-hint" id="ann-pane-hint">Draw, type, or grab a page to annotate on.</span>
+            </div>
+            <div class="page-pages-indicator" id="ann-pages-indicator" style="display:none;">
+              <span id="ann-pages-count" style="font-size:.72rem;color:var(--text3);"></span>
+            </div>
+          </div>
+          <!-- Page grabber — shown when magnet tool is active -->
+          <div class="page-grabber" id="page-grabber" style="display:none;">
+            <div class="page-grabber-row">
+              <span class="page-grabber-label">📌 Grab page from PDF</span>
+              <div style="display:flex;gap:6px;align-items:center;flex:1;">
+                <input type="number" id="grab-page-num" class="grab-input" min="1" value="1" placeholder="Page #">
+                <button class="grab-btn" onclick="grabPage()">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 15A6 6 0 0 0 6 3H3v4h3M18 15A6 6 0 0 1 18 3h3v4h-3M9 3v4M15 3v4M6 19h12"/></svg>
+                  Grab
+                </button>
+              </div>
+            </div>
+            <div class="page-grabber-note">Page image will be stamped onto the notes canvas. You can grab multiple pages — they stack vertically.</div>
+            <div id="grab-status" class="grab-status" style="display:none;"></div>
+          </div>
+        </div>
+        <div class="ann-scroll" id="ann-scroll">
+          <canvas id="ann-canvas"></canvas>
+          <div id="ann-textboxes"></div>
+        </div>
       </div>
     </div>
   </div>
