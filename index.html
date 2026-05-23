@@ -234,38 +234,35 @@
               </div>
               <h3 class="ai-detect-card-title">TurnitinTestGY</h3>
               <p class="ai-detect-card-desc">Run your work through a Turnitin-style AI &amp; plagiarism check. Specifically built for Caribbean students. See your AI percentage before submission.</p>
-              <div class="ai-detect-card-note">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                By using this service, you agree to CXCPaperVault ToS <em>and</em> TurnitinTestGY ToS.
+
+              <div id="turnitin-step1">
+                <button class="ai-detect-btn" onclick="document.getElementById('turnitin-step1').style.display='none';document.getElementById('turnitin-step2').style.display='flex';">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                  Open TurnitinTestGY
+                </button>
               </div>
-              <a href="https://gttriculture-cloud.github.io/TurnitinTestGY/" target="_blank" rel="noopener" class="ai-detect-btn">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                Open TurnitinTestGY
-              </a>
-            </div>
-            <div class="ai-detect-card coming">
-              <div class="ai-detect-card-top">
-                <div class="ai-detect-badge native">Native</div>
-                <span class="ai-detect-status soon">Coming Soon</span>
+
+              <div id="turnitin-step2" style="display:none;flex-direction:column;gap:12px;">
+                <div class="ai-tos-box">
+                  <div class="ai-tos-box-title">&#x1F4CB; Before You Continue</div>
+                  <p class="ai-tos-box-intro">By visiting TurnitinTestGY through CXCPaperVault, you agree to the following:</p>
+                  <ul class="ai-tos-box-list">
+                    <li>You must comply with <button class="tos-link-inline" onclick="openTos()">CXCPaperVault&#x2019;s Terms of Service</button> at all times.</li>
+                    <li>You must also comply with TurnitinTestGY&#x2019;s own Terms of Service as shown on their site.</li>
+                    <li>Do not submit content belonging to others without permission.</li>
+                    <li>AI detection scores are indicative only &#x2014; results may vary and are not definitive academic judgments.</li>
+                    <li>CXCPaperVault is not affiliated with Turnitin&#x2122; or iParadigms. TurnitinTestGY is independently operated.</li>
+                  </ul>
+                </div>
+                <div class="ai-tos-actions">
+                  <a href="https://gttriculture-cloud.github.io/TurnitinTestGY/" target="_blank" rel="noopener" class="ai-detect-btn" onclick="document.getElementById('turnitin-step2').style.display='none';document.getElementById('turnitin-step1').style.display='block';">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                    I Agree &#x2014; Open
+                  </a>
+                  <button class="ai-tos-cancel" onclick="document.getElementById('turnitin-step2').style.display='none';document.getElementById('turnitin-step1').style.display='block';">Cancel</button>
+                </div>
               </div>
-              <h3 class="ai-detect-card-title">Built-in AI Detector</h3>
-              <p class="ai-detect-card-desc">A native AI detection tool built directly into CXCPaperVault — no redirects, no accounts. Paste your text and get an instant AI percentage score.</p>
-              <button class="ai-detect-btn disabled" disabled>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                In Development
-              </button>
             </div>
-          </div>
-          <div class="ai-detect-tos">
-            <h4 class="ai-detect-tos-title">&#x1F4CB; When Using TurnitinTestGY</h4>
-            <p>By visiting TurnitinTestGY through CXCPaperVault, you acknowledge and agree to the following:</p>
-            <ul class="ai-detect-tos-list">
-              <li>You must comply with <button class="tos-link-inline" onclick="openTos()">CXCPaperVault's Terms of Service</button> at all times.</li>
-              <li>You must also comply with <a href="https://gttriculture-cloud.github.io/TurnitinTestGY/" target="_blank" rel="noopener">TurnitinTestGY's own Terms of Service</a> as displayed on their site.</li>
-              <li>Do not submit content belonging to others without permission.</li>
-              <li>AI detection scores are indicative only — results may vary and are not definitive academic judgments.</li>
-              <li>CXCPaperVault is not affiliated with Turnitin&#x2122; or iParadigms. TurnitinTestGY is independently operated.</li>
-            </ul>
           </div>
         </div>`;
       return;
@@ -946,23 +943,45 @@
     const pageIdx=pageNum-1;
     const imgUrl=`https://drive.google.com/thumbnail?id=${currentFileId}&sz=w1200&pageid=${pageIdx}`;
 
-    try{
-      // Fetch via Image element (CORS may block — use a proxy fallback)
-      const img=new Image();
-      img.crossOrigin="anonymous";
-      await new Promise((res,rej)=>{
-        img.onload=res;
-        img.onerror=rej;
-        img.src=imgUrl+"&t="+Date.now(); // cache bust
-        setTimeout(()=>rej(new Error("timeout")),12000);
-      });
+    // Helper: fetch image through a CORS proxy, return dataURL
+    async function fetchImgViaProxy(url){
+      // Try direct first (works if Drive sends CORS headers), then proxy fallback
+      const proxies=[
+        u=>u,  // direct
+        u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+        u=>`https://corsproxy.io/?${encodeURIComponent(u)}`
+      ];
+      for(const makeUrl of proxies){
+        try{
+          const resp=await fetch(makeUrl(url),{cache:"no-store"});
+          if(!resp.ok) continue;
+          const blob=await resp.blob();
+          if(!blob.size) continue;
+          return await new Promise((res,rej)=>{
+            const fr=new FileReader();
+            fr.onload=()=>res(fr.result);
+            fr.onerror=rej;
+            fr.readAsDataURL(blob);
+          });
+        }catch(e){ /* try next proxy */ }
+      }
+      throw new Error("all proxies failed");
+    }
 
-      // Convert to dataUrl
+    try{
+      const dataUrl=await Promise.race([
+        fetchImgViaProxy(imgUrl),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),18000))
+      ]);
+
+      // Measure dimensions via an Image element (no CORS needed — we have dataURL)
+      const img=new Image();
+      await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src=dataUrl; });
       const tmp=document.createElement("canvas");
-      tmp.width=img.naturalWidth||img.width;
-      tmp.height=img.naturalHeight||img.height;
+      tmp.width=img.naturalWidth||img.width||1200;
+      tmp.height=img.naturalHeight||img.height||1600;
       tmp.getContext("2d").drawImage(img,0,0);
-      const dataUrl=tmp.toDataURL("image/jpeg",0.9);
+      // dataUrl already good from proxy fetch — use directly
 
       // Calculate yOffset: stack pages vertically
       // Each page takes up (canvasWidth / aspect ratio) pixels
@@ -1088,6 +1107,17 @@
   window.addEventListener("resize",()=>{ if(annMode) sizeCanvas(); });
 </script>
 
+
+<script>
+  function showTurnitinTos() {
+    document.getElementById('turnitin-step1').style.display = 'none';
+    document.getElementById('turnitin-step2').style.display = 'block';
+  }
+  function hideTurnitinTos() {
+    document.getElementById('turnitin-step2').style.display = 'none';
+    document.getElementById('turnitin-step1').style.display = 'block';
+  }
+</script>
 <style>
   :root {
     --white:#ffffff; --off:#f8f7f4; --cream:#f0ede7; --card:#ffffff;
@@ -1539,7 +1569,7 @@
   .ai-detect-icon{font-size:2.8rem;margin-bottom:12px;line-height:1;}
   .ai-detect-title{font-family:var(--font-d);font-size:1.7rem;font-weight:700;color:var(--text);margin-bottom:8px;}
   .ai-detect-sub{font-size:.95rem;color:var(--text2);max-width:480px;margin:0 auto;line-height:1.7;}
-  .ai-detect-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:28px;}
+  .ai-detect-grid{display:grid;grid-template-columns:1fr;gap:18px;margin-bottom:28px;max-width:560px;margin-left:auto;margin-right:auto;}
   @media(max-width:640px){.ai-detect-grid{grid-template-columns:1fr;}}
   .ai-detect-card{background:var(--white);border:1.5px solid var(--border);border-radius:var(--r-lg);padding:24px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow);}
   .ai-detect-card.featured{border-color:var(--green);box-shadow:0 0 0 3px rgba(45,106,79,.08),var(--shadow-md);}
@@ -1564,6 +1594,22 @@
   .ai-detect-tos-list li{font-size:.83rem;color:var(--text2);line-height:1.6;}
   .ai-detect-tos-list a{color:var(--green);text-decoration:underline;}
   .tos-link-inline{background:none;border:none;color:var(--green);text-decoration:underline;cursor:pointer;font-family:var(--font);font-size:inherit;padding:0;}
+  .ai-tos-box{background:var(--off);border:1.5px solid var(--border);border-radius:var(--r-sm);padding:14px 16px;}
+  .ai-tos-box-title{font-size:.85rem;font-weight:700;color:var(--text);margin-bottom:6px;font-family:var(--font-d);}
+  .ai-tos-box-intro{font-size:.78rem;color:var(--text2);margin-bottom:8px;line-height:1.55;}
+  .ai-tos-box-list{padding-left:16px;display:flex;flex-direction:column;gap:5px;}
+  .ai-tos-box-list li{font-size:.77rem;color:var(--text2);line-height:1.55;}
+  .ai-tos-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .ai-tos-cancel{background:none;border:1.5px solid var(--border2);color:var(--text2);border-radius:var(--r-sm);padding:9px 15px;font-size:.82rem;font-weight:500;font-family:var(--font);cursor:pointer;transition:all .15s;}
+  .ai-tos-cancel:hover{background:var(--cream);color:var(--text);}
+  .ai-detect-grid{display:grid;grid-template-columns:1fr;gap:18px;margin-bottom:0;max-width:560px;margin-left:auto;margin-right:auto;}
+  .ai-detect-tos-inline{background:var(--off);border:1.5px solid var(--border);border-radius:var(--r-sm);padding:18px 20px;margin-top:4px;}
+  .ai-detect-tos-inline p{font-size:.82rem;color:var(--text2);margin-bottom:10px;line-height:1.6;}
+  .ai-detect-tos-inline .ai-detect-tos-title{font-size:.9rem;margin-bottom:8px;}
+  .turnitin-confirm-btns{display:flex;gap:8px;align-items:center;margin-top:14px;flex-wrap:wrap;}
+  .ai-detect-btn-cancel{background:none;border:1.5px solid var(--border2);color:var(--text2);border-radius:var(--r-sm);padding:10px 16px;font-size:.84rem;font-weight:500;font-family:var(--font);cursor:pointer;transition:all .15s;}
+  .ai-detect-btn-cancel:hover{background:var(--cream);color:var(--text);}
+
 </style>
 </head>
 <body>
@@ -1696,7 +1742,6 @@
         <button class="section-tab" data-section="ai" onclick="setSection('ai')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
           AI Detection
-          <span class="soon-pill">Soon</span>
         </button>
       </div>
     </div>
